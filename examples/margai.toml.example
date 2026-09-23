@@ -1,0 +1,36 @@
+# margai example configuration
+# Copy to ./margai.toml (or point MARGAI_CONFIG at it) and edit.
+
+[gateway]
+prefix = "marg"               # namespace for model ids: marg/<provider>/<model>
+expose = "prefixed"           # prefixed | both | raw
+timeout = 60.0                # default upstream timeout (seconds)
+default_provider = ""         # e.g. "openai" routes unprefixed/unknown models here
+models_cache_ttl = 300.0      # seconds /v1/models catalog is cached
+# host and port are used by `uv run margai`:
+host = "0.0.0.0"
+port = 8000
+
+[telemetry]
+enabled = true
+emit = "log"                  # none | log | callback
+# callback = "myapp.telemetry:on_record"   # when emit = "callback"
+
+[telemetry.costs]             # optional $ per 1M tokens for cost estimates
+"openai/gpt-4o" = { in = 2.50, out = 10.00 }
+
+[hooks]
+load = []                     # e.g. ["examples.simple_hooks"] or ["myapp.hooks:register"]
+
+[providers.my_openai]
+kind = "openai"               # openai | openai-compatible
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+# models = ["gpt-4o", "gpt-4o-mini"]   # optional: static list (offline routing)
+# default_model = "gpt-4o"
+
+# A local OpenAI-compatible server (vLLM / Ollama / LM Studio):
+# [providers.local]
+# kind = "openai-compatible"
+# base_url = "http://localhost:11434/v1"
+# api_key_env = ""
