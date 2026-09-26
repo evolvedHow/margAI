@@ -18,8 +18,9 @@ pick that?" becomes unanswerable.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Any, Iterable
+from typing import Any
 
 __all__ = ["INTENT_KEY", "RoutingIntent"]
 
@@ -45,7 +46,7 @@ class RoutingIntent:
     notes: tuple[tuple[str, Any], ...] = ()
 
     @classmethod
-    def from_tags(cls, tags: Iterable[Any]) -> "RoutingIntent":
+    def from_tags(cls, tags: Iterable[Any]) -> RoutingIntent:
         """Seed an intent from parsed bangtags.
 
         Recognised tag values become first-class fields so selectors do not
@@ -93,13 +94,13 @@ class RoutingIntent:
             require=frozenset(require),
         )
 
-    def with_(self, **changes: Any) -> "RoutingIntent":
+    def with_(self, **changes: Any) -> RoutingIntent:
         return replace(self, **changes)
 
     def wants(self, tag: str) -> bool:
         return tag in self.tags
 
-    def note(self, key: str, value: Any) -> "RoutingIntent":
+    def note(self, key: str, value: Any) -> RoutingIntent:
         """Attach an advisory note (merged with any existing value for ``key``)."""
         merged = {k: v for k, v in self.notes if k != key}
         merged[key] = value

@@ -37,8 +37,10 @@ import importlib
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any, ClassVar
 
 from .config import Config
 from .core import DONE
@@ -121,7 +123,7 @@ class Wrapper:
         *,
         load_hooks: bool = True,
         name: str = "margAI",
-    ) -> "Wrapper":
+    ) -> Wrapper:
         from .transport.httpx import HttpxTransport
 
         transport = transport or HttpxTransport(timeout=config.gateway.timeout)
@@ -279,7 +281,6 @@ class Wrapper:
         tags = ctx.tags
         if not tags or not len(self.marglets):
             return tags
-        names = [getattr(tag, "name", None) for tag in tags]
         rank = {m.name: i for i, m in enumerate(self.marglets.ordered())}
         marglet_tags = [t for t in tags if getattr(t, "name", None) in rank]
         plain_tags = [t for t in tags if getattr(t, "name", None) not in rank]
@@ -378,7 +379,7 @@ class Wrapper:
     # The routed surface. Every kind here is backed by a real Provider method
     # and covered by tests; anything absent is not routable. See
     # docs/ENDPOINTS.md before adding one.
-    _KIND_PREPARE = {
+    _KIND_PREPARE: ClassVar[dict[str, str]] = {
         "chat": "prepare_chat",
         "completions": "prepare_completions",
         "embeddings": "prepare_embeddings",
@@ -386,7 +387,7 @@ class Wrapper:
         "audio_transcriptions": "prepare_audio_transcriptions",
     }
 
-    _KIND_PARSE = {
+    _KIND_PARSE: ClassVar[dict[str, str]] = {
         "chat": "parse_response",
         "completions": "parse_completion_response",
         "embeddings": "parse_embeddings_response",
@@ -394,14 +395,16 @@ class Wrapper:
         "audio_transcriptions": "parse_audio_transcriptions_response",
     }
 
-    _KIND_PARSE_CHUNK = {
+    _KIND_PARSE_CHUNK: ClassVar[dict[str, str]] = {
         "chat": "parse_chunk",
         "completions": "parse_completion_chunk",
     }
 
-    _STREAMABLE_KINDS = {"chat", "completions"}
+    _STREAMABLE_KINDS: ClassVar[set[str]] = {"chat", "completions"}
 
-    async def _prepare(self, body: dict[str, Any], stream: bool, kind: str = "chat") -> tuple[RequestContext, Any, PreparedRequest]:
+    async def _prepare(
+        self, body: dict[str, Any], stream: bool, kind: str = "chat"
+    ) -> tuple[RequestContext, Any, PreparedRequest]:
         """Run request hooks, resolve the route, and build the upstream request.
 
         The body is shallow-copied, not deep-copied: a chat body is a list of
@@ -433,10 +436,8 @@ class Wrapper:
             # the call that failed, not just that something did. This covers
             # ordinary exceptions too: a before-hook that raises is the most
             # common failure of all, and it must still reach the error phase.
-            try:
-                exc.ctx = ctx
-            except Exception:  # pragma: no cover - exotic exception types
-                pass
+            with suppress(Exception):  # exotic exception types may forbid attrs
+                exc.ctx = ctx  # type: ignore[attr-defined]
             raise
         return ctx, provider, prepared
 
@@ -479,18 +480,27 @@ class Wrapper:
         logger.error("unhandled error: %r", exc, exc_info=exc)
         return ApiError(500, "Internal server error", error_type="server_error").body
 
-    def _record(self, ctx: RequestContext, *, status: int = 200, error: str | None = None, usage: dict[str, Any] | None = None, source: str = "chat") -> CallRecord:
-        usage = usage or {}
-        details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    def _record(
+        self,
+        ctx: RequestContext,
+        *,
+        status: int = 200,
+        error: str | None = None,
+        usage: dict[str, Any] | None = None,
+        source: str = "chat",
+    ) -> CallRecord:
+        tokens: dict[str, Any] = usage or {}
+        raw_details = tokens.get("prompt_tokens_details")
+        details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
         return self.telemetry.record(
             source=source,
             request_model=ctx.request_model,
             provider=ctx.provider,
             upstream_model=ctx.upstream_model,
             stream=ctx.stream,
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
+            prompt_tokens=tokens.get("prompt_tokens"),
+            completion_tokens=tokens.get("completion_tokens"),
+            total_tokens=tokens.get("total_tokens"),
             cached_tokens=details.get("cached_tokens"),
             latency_ms=ctx.elapsed_ms(),
             status=status,
@@ -515,23 +525,33 @@ class Wrapper:
             self.telemetry.emit(self._record(ctx, status=status, usage=provider.extract_usage(payload), source=kind))
             return GatewayResponse(body=payload, status=status)
         except ApiError as exc:
-            handled = await self._run_error_hooks(exc, ctx)
-            ctx = getattr(exc, "ctx", None) or ctx
-            self.telemetry.emit(self._record(ctx, status=exc.status, error=exc.message, source=kind) if ctx else self.telemetry.record(status=exc.status, error=exc.message, source=kind))
-            if handled is not None:
-                return GatewayResponse(body=handled, status=exc.status)
-            return GatewayResponse(body=exc.body, status=exc.status)
+            return await self._fail(exc, ctx, kind, exc.status, exc.message)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("unhandled error in wrapper.complete")
-            handled = await self._run_error_hooks(exc, ctx)
-            ctx = getattr(exc, "ctx", None) or ctx
-            self.telemetry.emit(self._record(ctx, status=500, error=repr(exc), source=kind) if ctx else self.telemetry.record(status=500, error=repr(exc), source=kind))
-            body = handled if handled is not None else self._default_error_body(exc)
-            return GatewayResponse(body=body, status=500)
+            return await self._fail(exc, ctx, kind, 500, repr(exc))
+
+    async def _fail(
+        self, exc: Exception, ctx: RequestContext | None, kind: str, status: int, error: str
+    ) -> GatewayResponse:
+        """The single failure path: error hooks, then telemetry, then a body.
+
+        Shared by the non-streaming and streaming-preflight paths. They were
+        near-identical but not identical -- one tested `ctx` for truthiness and
+        the other for `is not None` -- so a failure could be recorded in one
+        place and not the other as the two drifted.
+        """
+        handled = await self._run_error_hooks(exc, ctx)
+        ctx = getattr(exc, "ctx", None) or ctx
+        self.telemetry.emit(
+            self._record(ctx, status=status, error=error, source=kind)
+            if ctx is not None
+            else self.telemetry.record(status=status, error=error, source=kind)
+        )
+        return GatewayResponse(body=handled if handled is not None else self._default_error_body(exc), status=status)
 
     # -- streaming chat / completions -----------------------------------------
 
-    async def open_stream(self, body: dict[str, Any], *, kind: str = "chat") -> "StreamHandle":
+    async def open_stream(self, body: dict[str, Any], *, kind: str = "chat") -> StreamHandle:
         """Open the upstream stream. Raises :class:`ApiError` (or any other
         exception) *before* any SSE bytes would be sent, so the caller can
         still respond with a JSON error instead of a broken stream.
@@ -542,7 +562,12 @@ class Wrapper:
         happened.
         """
         if kind not in self._STREAMABLE_KINDS:
-            raise ApiError(400, f"Kind '{kind}' does not support streaming", error_type="invalid_request_error", param="model")
+            raise ApiError(
+                400,
+                f"Kind '{kind}' does not support streaming",
+                error_type="invalid_request_error",
+                param="model",
+            )
         ctx: RequestContext | None = None
         try:
             ctx, provider, prepared = await self._prepare(body, stream=True, kind=kind)
@@ -556,7 +581,10 @@ class Wrapper:
         except ApiError as exc:
             handled = await self._record_stream_failure(exc, exc.status, exc.message, ctx, kind)
             if handled is not None:
-                exc = exc.with_body(handled)
+                # `with_body` returns a new ApiError, so this must be an
+                # explicit `raise exc` -- a bare `raise` would re-raise the
+                # original and drop the hook's body.
+                exc = exc.with_body(handled)  # an error hook took over the body
             raise exc
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("failed to open stream")
@@ -571,12 +599,11 @@ class Wrapper:
         produced a byte. Returns the error body if a hook took it over."""
         handled = await self._run_error_hooks(exc, ctx)
         ctx = getattr(exc, "ctx", None) or ctx
-        record = (
+        self.telemetry.emit(
             self._record(ctx, status=status, error=error, source=kind)
             if ctx is not None
             else self.telemetry.record(status=status, error=error, source=kind)
         )
-        self.telemetry.emit(record)
         return handled
 
     # -- model catalog ------------------------------------------------------
@@ -623,7 +650,15 @@ class StreamHandle:
     is what an SSE transport feeds to the client.
     """
 
-    def __init__(self, wrapper: Wrapper, ctx: RequestContext, provider: Any, upstream: UpstreamStream, *, kind: str = "chat") -> None:
+    def __init__(
+        self,
+        wrapper: Wrapper,
+        ctx: RequestContext,
+        provider: Any,
+        upstream: UpstreamStream,
+        *,
+        kind: str = "chat",
+    ) -> None:
         self._wrapper = wrapper
         self._ctx = ctx
         self._provider = provider
@@ -631,7 +666,12 @@ class StreamHandle:
         self._kind = kind
         parse_chunk_method = wrapper._KIND_PARSE_CHUNK.get(kind)
         if parse_chunk_method is None:
-            raise ApiError(400, f"Kind '{kind}' does not support streaming", error_type="invalid_request_error", param="model")
+            raise ApiError(
+                400,
+                f"Kind '{kind}' does not support streaming",
+                error_type="invalid_request_error",
+                param="model",
+            )
         self._parse_chunk = getattr(provider, parse_chunk_method)
         self._last_usage: dict[str, Any] | None = None
 
@@ -675,7 +715,9 @@ class StreamHandle:
                 yield _SSE_DONE
             finally:
                 self._wrapper.telemetry.emit(
-                    self._wrapper._record(self._ctx, status=status, error=error, usage=self._last_usage, source=self._kind)
+                    self._wrapper._record(
+                        self._ctx, status=status, error=error, usage=self._last_usage, source=self._kind
+                    )
                 )
 
         return _gen()
@@ -684,8 +726,10 @@ class StreamHandle:
 def _load_hook_module(entry: str, wrapper: Wrapper) -> None:
     module_name, sep, attr = entry.partition(":")
     module = importlib.import_module(module_name)
+    # Either a module (`register` attribute) or a resolved dotted path; both
+    # are dynamic, so the callable is only known at runtime.
+    register: Any = module
     if sep and attr:
-        register = module
         for part in attr.split("."):
             register = getattr(register, part)
     else:

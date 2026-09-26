@@ -33,8 +33,9 @@ inside a selector, explicitly, and put the policy in the ``reason``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from .core.errors import ApiError
 from .core.intent import RoutingIntent
@@ -93,15 +94,15 @@ def coerce_route(value: Any, *, selector: str = "") -> Route | None:
             )
         return Route(provider, model, f"selector:{selector}" if selector else "")
     if isinstance(value, dict):
-        provider = value.get("provider")
-        model = value.get("model")
-        if not provider or not model:
+        dict_provider = value.get("provider")
+        dict_model = value.get("model")
+        if not dict_provider or not dict_model:
             raise ApiError(
                 500,
                 f"selector {selector!r} returned a dict without provider/model: {value!r}",
                 error_type="server_error",
             )
-        return Route(str(provider), str(model), f"selector:{selector}" if selector else "")
+        return Route(str(dict_provider), str(dict_model), f"selector:{selector}" if selector else "")
     if isinstance(value, (list, tuple)):
         for item in value:
             route = coerce_route(item, selector=selector)
@@ -153,7 +154,14 @@ class Routing:
         self._selectors.append(selector)
         return selector
 
-    def selector(self, fn: SelectorFn | None = None, *, name: str | None = None, order: int = 0, only_for: Iterable[str] = ()):
+    def selector(
+        self,
+        fn: SelectorFn | None = None,
+        *,
+        name: str | None = None,
+        order: int = 0,
+        only_for: Iterable[str] = (),
+    ):
         """Decorator form of :meth:`add_selector`."""
         if fn is None:
             def deco(inner: SelectorFn) -> SelectorFn:

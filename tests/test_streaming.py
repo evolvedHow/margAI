@@ -5,13 +5,18 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import (
+    FakeStream,
+    FakeTransport,
+    chat_body,
+    chunk_payload,
+    completion_chunk_payload,
+    make_wrapper,
+)
 
-from margAI import ApiError, Telemetry
-from margAI.config import TelemetryConfig
+from margAI import ApiError
 from margAI.core.errors import DONE
 from margAI.providers.openai_compat import OpenAICompatProvider
-
-from conftest import FakeStream, FakeTransport, chunk_payload, completion_chunk_payload, make_wrapper
 
 
 async def collect(handle):
@@ -20,9 +25,9 @@ async def collect(handle):
 
 def sse_json_bytes(lines):
     return [
-        json.loads(l[len("data: ") :])
-        for l in lines
-        if l.startswith("data: ") and not l.startswith("data: [DONE]")
+        json.loads(ln[len("data: ") :])
+        for ln in lines
+        if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
     ]
 
 
@@ -66,11 +71,11 @@ async def test_stream_can_drop_a_chunk():
             return None
         return chunk
 
-    lines = [line async for line in (await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []})).lines()]
+    lines = [line async for line in (await wrapper.open_stream(chat_body())).lines()]
     contents = [
-        json.loads(l[len("data: ") :])["choices"][0]["delta"]["content"]
-        for l in lines
-        if l.startswith("data: ") and not l.startswith("data: [DONE]")
+        json.loads(ln[len("data: ") :])["choices"][0]["delta"]["content"]
+        for ln in lines
+        if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
     ]
     assert contents == ["a"]
 
@@ -78,7 +83,19 @@ async def test_stream_can_drop_a_chunk():
 async def test_open_stream_raises_on_upstream_error_status():
     wrapper = make_wrapper(
         FakeTransport(
-            streams=[FakeStream([], status=429, error_json={"error": {"message": "quota", "type": "insufficient_quota", "code": "quota"}})]
+            streams=[
+                FakeStream(
+                    [],
+                    status=429,
+                    error_json={
+                        "error": {
+                            "message": "quota",
+                            "type": "insufficient_quota",
+                            "code": "quota",
+                        }
+                    },
+                )
+            ]
         )
     )
     with pytest.raises(ApiError) as e:
@@ -102,14 +119,14 @@ async def test_stream_error_hook_shapes_midstream_error():
     def on_error(exc, ctx):
         return {"error": {"message": "connection interrupted", "type": "upstream_error", "param": None, "code": None}}
 
-    lines = [line async for line in (await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []})).lines()]
+    lines = [line async for line in (await wrapper.open_stream(chat_body())).lines()]
     error_chunk = json.loads(lines[1][6:-2])
     assert error_chunk["error"]["message"] == "connection interrupted"
     assert lines[-1] == "data: [DONE]\n\n"
 
 
 async def test_stream_emits_telemetry_with_usage_from_last_chunk():
-    records = []
+    records: list = []
     from margAI import Telemetry
     from margAI.config import TelemetryConfig
 
@@ -137,9 +154,9 @@ async def test_completions_stream_forwards_text_deltas():
     )
     lines = await collect(handle)
     texts = [
-        json.loads(l[len("data: ") :])["choices"][0]["text"]
-        for l in lines
-        if l.startswith("data: ") and not l.startswith("data: [DONE]")
+        json.loads(ln[len("data: ") :])["choices"][0]["text"]
+        for ln in lines
+        if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
     ]
     assert texts == ["ap", "ple"]
     assert lines[-1] == "data: [DONE]\n\n"

@@ -23,8 +23,10 @@ margAI = "margAI.__main__:run"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "ruff>=0.16.9",
 ]
 
 [build-system]
@@ -37,3 +39,47 @@ packages = ["src/margAI", "src/margAI/examples"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RET", "RUF", "TRY"]
+ignore = [
+    # FastAPI's dependency-injection idiom *is* a call in a default argument.
+    "B008",
+    # `except Exception` in the request path is deliberate: a failing hook or
+    # sink must not take the call down, and the log carries the detail.
+    "BLE001",
+    # Descriptive messages are the whole point of this API surface.
+    "TRY003",
+    # Catch-transform-re-raise is how errors get their context attached.
+    "TRY301",
+    # Guard-clause chains read better than the equivalent negated boolean.
+    "SIM103",
+    # `raise exc` is correct when `exc` was rebound to a *new* exception via
+    # `with_body()`; a bare `raise` would discard it. See wrapper.open_stream.
+    "TRY201",
+    # `class HookKind(str, Enum)` is deliberate: it keeps the wire/JSON form
+    # identical to the enum without a conversion at every comparison.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import broadly and shadow names on purpose; conftest is a shared
+# fixture module that everything imports from.
+"tests/conftest.py" = ["F401"]
+"tests/*" = ["F811"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+# Untyped handler/plugin boundaries are the framework's extension points; the
+# decorator surface hands whatever the user wrote straight to the pipeline.
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+ignore_missing_imports = true

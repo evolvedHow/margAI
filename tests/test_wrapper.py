@@ -5,13 +5,20 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import (
+    FakeTransport,
+    chat_body,
+    chat_payload,
+    completion_payload,
+    make_wrapper,
+    provider_config,
+    token_usage,
+    user,
+)
 
-from margAI import ApiError
-from margAI.config import GatewayConfig, TelemetryConfig
+from margAI.config import TelemetryConfig
 from margAI.core.protocol import UpstreamResponse
 from margAI.telemetry import Telemetry
-
-from conftest import FakeTransport, chat_payload, completion_payload, make_wrapper, provider_config
 
 
 def test_complete_passes_through_and_applies_hooks():
@@ -20,7 +27,7 @@ def test_complete_passes_through_and_applies_hooks():
     async def handler(req):
         body = json.loads(json.dumps(req.json))
         seen.append(("http", body["model"]))
-        return UpstreamResponse(status=200, body=chat_payload("ok", usage={"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}))
+        return UpstreamResponse(status=200, body=chat_payload("ok", usage=token_usage()))
 
     wrapper = make_wrapper(FakeTransport(responses=[handler]))
 
@@ -37,7 +44,7 @@ def test_complete_passes_through_and_applies_hooks():
 
     import asyncio
 
-    result = asyncio.run(wrapper.complete({"model": "margAI/openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]}))
+    result = asyncio.run(wrapper.complete(chat_body(user("hi"))))
     assert result.status == 200
     content = result.body["choices"][0]["message"]["content"]
     assert content == "ok!"
@@ -47,8 +54,9 @@ def test_complete_passes_through_and_applies_hooks():
 
 
 def test_request_hook_can_replace_body():
-    sent = []
-    wrapper = make_wrapper(FakeTransport(responses=[UpstreamResponse(200, chat_payload("x"))]))
+    sent: list = []
+    transport = FakeTransport(responses=[UpstreamResponse(200, chat_payload("x"))])
+    wrapper = make_wrapper(transport)
 
     @wrapper.before
     def override(ctx):
@@ -64,7 +72,7 @@ def test_request_hook_can_replace_body():
         sent.append(req.json)
         return UpstreamResponse(200, chat_payload("x"))
 
-    wrapper.transport.responses.insert(0, spy)
+    transport.responses.insert(0, spy)
 
     import asyncio
 
@@ -99,7 +107,7 @@ def test_error_hook_can_take_over_body():
 def test_provider_qualified_unknown_model_passes_through():
     """A provider-qualified id is never 404'd by the router: the upstream
     provider remains authoritative for model validation."""
-    sent = []
+    sent: list = []
 
     async def spy(req):
         sent.append(req.json["model"])
@@ -114,8 +122,11 @@ def test_provider_qualified_unknown_model_passes_through():
 
 
 def test_telemetry_records_usage():
-    records = []
-    telemetry = Telemetry(TelemetryConfig(enabled=True, emit="callback", callback="irrelevant"), callback=records.append)
+    records: list = []
+    telemetry = Telemetry(
+        TelemetryConfig(enabled=True, emit="callback", callback="irrelevant"),
+        callback=records.append,
+    )
     wrapper = make_wrapper(
         FakeTransport(
             responses=[
@@ -152,7 +163,7 @@ def test_cost_estimate_when_configured():
     from margAI.config import CostEntry, TelemetryConfig
 
     tele = Telemetry(TelemetryConfig(enabled=True, emit="none", costs=(CostEntry("openai", "gpt-4o", 2.5, 10.0),)))
-    records = []
+    records: list = []
 
     class Swappable(Telemetry):
         def emit(self, record):
@@ -165,7 +176,7 @@ def test_cost_estimate_when_configured():
             responses=[
                 UpstreamResponse(
                     200,
-                    chat_payload("ok", usage={"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000, "total_tokens": 2_000_000}),
+                    chat_payload("ok", usage=token_usage(1_000_000, 1_000_000, 2_000_000)),
                 )
             ]
         ),
@@ -193,7 +204,7 @@ def test_request_hook_runs_before_routing_is_visible():
 
 
 def test_completions_pipeline_hits_upstream_completions_endpoint():
-    sent = []
+    sent: list = []
 
     async def handler(req):
         sent.append((req.url, req.json))
@@ -215,7 +226,9 @@ def test_completions_pipeline_hits_upstream_completions_endpoint():
 
 
 def test_completions_bad_json_raises_openai_error_body():
-    wrapper = make_wrapper(FakeTransport(responses=[UpstreamResponse(status=400, body={"error": {"message": "no prompt"}})]))
+    wrapper = make_wrapper(
+        FakeTransport(responses=[UpstreamResponse(status=400, body={"error": {"message": "no prompt"}})])
+    )
     import asyncio
 
     result = asyncio.run(wrapper.complete({"model": "margAI/openai/gpt-4o", "prompt": ""}, kind="completions"))
@@ -224,10 +237,17 @@ def test_completions_bad_json_raises_openai_error_body():
 
 
 def test_completions_telemetry_source():
-    records = []
-    telemetry = Telemetry(TelemetryConfig(enabled=True, emit="callback", callback="irrelevant"), callback=records.append)
+    records: list = []
+    telemetry = Telemetry(
+        TelemetryConfig(enabled=True, emit="callback", callback="irrelevant"),
+        callback=records.append,
+    )
     wrapper = make_wrapper(
-        FakeTransport(responses=[UpstreamResponse(200, completion_payload("ok", usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}))]),
+        FakeTransport(
+            responses=[
+                UpstreamResponse(200, completion_payload("ok", usage=token_usage(2, 3)))
+            ]
+        ),
         telemetry=telemetry,
     )
     import asyncio
@@ -238,7 +258,7 @@ def test_completions_telemetry_source():
 
 
 def test_anthropic_provider_through_wrapper():
-    sent = []
+    sent: list = []
 
     async def handler(req):
         sent.append(req.url)

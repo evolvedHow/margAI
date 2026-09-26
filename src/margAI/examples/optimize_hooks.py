@@ -13,6 +13,7 @@ what keeps user-typed text from accidentally firing someone's handler.
 from __future__ import annotations
 
 from typing import Any
+from weakref import WeakSet
 
 from margAI import Marglet, Wrapper, install_bangtags
 
@@ -76,9 +77,15 @@ def optimize_error(exc: Exception, ctx: Any, tag: Any) -> dict | None:
     }
 
 
+# Idempotence guard. A WeakSet keeps the bookkeeping off the wrapper itself,
+# so a `register()` that gets called twice -- by a config reload, say -- is a
+# no-op without inventing a private attribute on someone else's object.
+_registered: WeakSet[Wrapper] = WeakSet()
+
+
 def register(app: Wrapper) -> Wrapper:
     """Register the optimize marglet. Idempotent, so config reloads are safe."""
-    if getattr(app, "_optimize_registered", False):
+    if app in _registered:
         return app
 
     install_bangtags(app)
@@ -92,5 +99,5 @@ def register(app: Wrapper) -> Wrapper:
             error=optimize_error,
         )
     )
-    app._optimize_registered = True
+    _registered.add(app)
     return app

@@ -6,10 +6,6 @@ import asyncio
 import json
 
 import pytest
-
-from margAI import install_bangtags
-from margAI.core.marglets import Marglet, MargletRegistry
-
 from conftest import (
     FakeStream,
     FakeTransport,
@@ -17,8 +13,10 @@ from conftest import (
     chat_payload,
     chunk_payload,
     make_wrapper,
-    provider_config,
 )
+
+from margAI import install_bangtags
+from margAI.core.marglets import Marglet, MargletRegistry
 
 
 def sse_lines(*texts: str) -> list[str]:
@@ -73,16 +71,33 @@ def test_inactive_marglet_does_not_fire():
 
 
 def test_all_four_phases_fire():
-    w, t = ok_wrapper()
+    w, _ = ok_wrapper()
     seen: list[str] = []
+
+    def mark(phase):
+        """A `before` handler: record, change nothing."""
+
+        def handler(ctx, tag):
+            seen.append(phase)
+
+        return handler
+
+    def pass_through(phase):
+        """An `after`/`stream` handler: record, return the payload unchanged."""
+
+        def handler(payload, ctx, *rest):
+            seen.append(phase)
+            return payload
+
+        return handler
 
     w.add_marglet(
         Marglet(
             "full",
-            before=lambda ctx, tag: seen.append("before"),
-            after=lambda payload, ctx, tag: (seen.append("after"), payload)[1],
-            stream=lambda chunk, ctx, tag, scratch: (seen.append("stream"), chunk)[1],
-            error=lambda exc, ctx, tag: seen.append("error") or None,
+            before=mark("before"),
+            after=pass_through("after"),
+            stream=pass_through("stream"),
+            error=lambda exc, ctx, tag: mark("error")(ctx, tag),
         )
     )
 
@@ -112,7 +127,7 @@ def test_add_marglet_group():
             payload["choices"][0]["message"]["content"] += "!"
             return payload
 
-    w, t = ok_wrapper()
+    w, _ = ok_wrapper()
     w.add_marglet_group(Bullets())
     assert w.marglets.names() == ["shout", "terse"]
     r = asyncio.run(w.complete(chat(tag="terse")))
@@ -124,15 +139,18 @@ def test_stream_phase_transforms_chunks():
     w.add_marglet(
         Marglet("caps", stream=lambda chunk, ctx, tag, scratch: {
             **chunk,
-            "choices": [{**c, "delta": {**c["delta"], "content": c["delta"].get("content", "").upper()}} for c in chunk["choices"]],
+            "choices": [
+                {**c, "delta": {**c["delta"], "content": c["delta"].get("content", "").upper()}}
+                for c in chunk["choices"]
+            ],
         })
     )
     handle = asyncio.run(w.open_stream({**chat(tag="caps"), "stream": True}))
     lines = asyncio.run(collect(handle))
     contents = [
-        json.loads(l[6:])["choices"][0]["delta"]["content"]
-        for l in lines
-        if l.startswith("data: ") and "[DONE]" not in l
+        json.loads(ln[6:])["choices"][0]["delta"]["content"]
+        for ln in lines
+        if ln.startswith("data: ") and "[DONE]" not in ln
     ]
     assert contents == ["A", "B"]
 
@@ -140,7 +158,12 @@ def test_stream_phase_transforms_chunks():
 def test_error_phase_takes_over_body():
     w, _ = ok_wrapper(responses=[UpstreamResponse(500, {"error": {"message": "boom"}})])
     w.add_marglet(
-        Marglet("friendly", error=lambda exc, ctx, tag: {"error": {"message": "try again later", "type": "server_error"}})
+        Marglet(
+            "friendly",
+            error=lambda exc, ctx, tag: {
+                "error": {"message": "try again later", "type": "server_error"}
+            },
+        )
     )
     r = asyncio.run(w.complete(chat(tag="friendly")))
     assert r.status == 500
@@ -151,13 +174,13 @@ def test_marglets_visible_in_success_phase():
     """`ctx.marglets` has to be populated before the handlers run, in every
     phase it can appear in."""
     w, _ = ok_wrapper()
-    seen: dict[str, list[str]] = {}
+    seen: dict[str, object] = {}
 
     def snap(key):
         def hook(*a):
             ctx = next(x for x in a if hasattr(x, "marglets"))
             seen[key] = ctx.marglets
-            return None
+            return
 
         return hook
 
@@ -170,12 +193,11 @@ def test_marglets_visible_in_error_phase():
     """On a failure the error phase is the only record of what was asked
     for, so `ctx.marglets` has to be populated there too."""
     w, _ = ok_wrapper(responses=[UpstreamResponse(500, {"error": {"message": "boom"}})])
-    seen: dict[str, list[str]] = {}
+    seen: dict[str, object] = {}
 
     def snap(*a):
         ctx = next(x for x in a if hasattr(x, "marglets"))
-        seen["error"] = ctx.marglets
-        return None
+        seen["error"] = list(ctx.marglets)
 
     w.add_marglet(Marglet("watch", before=lambda *a: seen.__setitem__("before", "fired"), error=snap))
     asyncio.run(w.complete(chat(tag="watch")))
@@ -197,7 +219,7 @@ def test_marglets_recorded_even_when_a_before_hook_raises():
 
 
 def test_order_controls_dispatch_sequence():
-    w, t = ok_wrapper()
+    w, _ = ok_wrapper()
     calls: list[str] = []
     w.add_marglet(Marglet("late", order=10, before=lambda ctx, tag: calls.append("late")))
     w.add_marglet(Marglet("early", order=-10, before=lambda ctx, tag: calls.append("early")))
@@ -219,7 +241,8 @@ def test_bangtag_directive_is_stripped_before_upstream():
 def test_registry_lookup_rules():
     reg = MargletRegistry()
     reg.add(Marglet("a"))
-    assert "a" in reg and reg.get("a").name == "a"
+    found = reg.get("a")
+    assert "a" in reg and found is not None and found.name == "a"
     assert reg.get("missing") is None
     assert len(reg) == 1
     assert [m.name for m in reg] == ["a"]
@@ -259,3 +282,18 @@ def test_marglet_spec_reports_routing_affinity():
     assert router.affects_routing is True
     assert router.spec().affects_routing is True
     assert "select" in repr(router)
+
+
+def test_bangtag_install_is_idempotent_per_namespace():
+    w, _ = ok_wrapper()
+
+    install_bangtags(w)
+    install_bangtags(w)  # same namespace again: no-op
+    install_bangtags(w, namespace="acme")  # a different one must still register
+
+    # install_bangtags registers a per-call request hook, so look there.
+    names = [h.name for h in w._hooks.requests()]
+    assert names.count("bangtags:margai") == 1
+    assert names.count("bangtags:acme") == 1
+    # The guard must not leave bookkeeping on the object it was handed.
+    assert not hasattr(w, "_bangtags_installed")

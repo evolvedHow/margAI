@@ -21,8 +21,9 @@ So a marglet can be written three ways, all equivalent:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any
 
 __all__ = [
     "ACTIVE_KEY",

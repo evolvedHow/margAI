@@ -5,20 +5,23 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
-
-from margAI import ApiError
-from margAI.core.protocol import UpstreamResponse
-from margAI.transport.fastapi import build_app
-from margAI.wrapper import GatewayResponse
-
 from conftest import (
+    CHAT_MODEL,
+    SSE_DONE,
     FakeStream,
     FakeTransport,
+    chat_body,
     chat_payload,
     chunk_payload,
+    completion_chunk_payload,
     make_wrapper,
+    sse_line,
+    user,
 )
+from fastapi.testclient import TestClient
+
+from margAI.core.protocol import UpstreamResponse
+from margAI.transport.fastapi import build_app
 
 
 @pytest.fixture
@@ -62,27 +65,28 @@ def test_stream_chat(client):
             streams=[
                 FakeStream(
                     [
-                        'data: {"id": "cmpl", "object": "chat.completion.chunk", "model": "echo", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": null}]}',
-                        'data: {"id": "cmpl", "object": "chat.completion.chunk", "model": "echo", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}',
-                        "data: [DONE]",
+                        sse_line(chunk_payload("hi")),
+                        sse_line(chunk_payload("", finish_reason="stop")),
+                        SSE_DONE,
                     ]
                 )
             ]
         )
     )
     app = build_app(streaming_wrapper)
-    with TestClient(app) as c:
-        with c.stream("POST", "/v1/chat/completions", json={"model": "margAI/openai/gpt-4o", "messages": [], "stream": True}) as r:
-            assert r.status_code == 200
-            assert r.headers["content-type"].startswith("text/event-stream")
-            lines = [l for l in r.iter_lines() if l]
-            contents = [
-                json.loads(l[len("data: ") :])["choices"][0]["delta"].get("content")
-                for l in lines
-                if l.startswith("data: ") and not l.startswith("data: [DONE]")
-            ]
-            assert contents[0] == "hi"
-            assert lines[-1] == "data: [DONE]"
+    with TestClient(app) as c, c.stream(
+        "POST", "/v1/chat/completions", json=chat_body(stream=True)
+    ) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        lines = [ln for ln in r.iter_lines() if ln]
+        contents = [
+            json.loads(ln[len("data: ") :])["choices"][0]["delta"].get("content")
+            for ln in lines
+            if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
+        ]
+        assert contents[0] == "hi"
+        assert lines[-1] == "data: [DONE]"
 
 
 def test_invalid_json_returns_400(client):
@@ -127,7 +131,8 @@ def test_upstream_error_propagates_status(client):
     app = build_app(err_wrapper)
     with TestClient(app) as c:
         resp = c.post(
-            "/v1/chat/completions", json={"model": "margAI/openai/gpt-4o", "messages": [{"role": "user", "content": "x"}]}
+            "/v1/chat/completions",
+            json=chat_body(user("x")),
         )
         assert resp.status_code == 429
         assert resp.json()["error"]["message"] == "rl"
@@ -143,7 +148,13 @@ def test_completions_endpoint():
     wrapper = make_wrapper(
         FakeTransport(
             responses=[
-                UpstreamResponse(200, {"object": "text_completion", "choices": [{"index": 0, "text": "pong", "finish_reason": "stop"}]})
+                UpstreamResponse(
+                    200,
+                    {
+                        "object": "text_completion",
+                        "choices": [{"index": 0, "text": "pong", "finish_reason": "stop"}],
+                    },
+                )
             ]
         )
     )
@@ -162,27 +173,28 @@ def test_completions_stream_endpoint():
             streams=[
                 FakeStream(
                     [
-                        'data: {"object": "text_completion", "choices": [{"index": 0, "text": "ap", "finish_reason": null}]}',
-                        'data: {"object": "text_completion", "choices": [{"index": 0, "text": "ple", "finish_reason": "stop"}]}',
-                        "data: [DONE]",
+                        sse_line(completion_chunk_payload("ap")),
+                        sse_line(completion_chunk_payload("ple", finish_reason="stop")),
+                        SSE_DONE,
                     ]
                 )
             ]
         )
     )
     app = build_app(wrapper)
-    with TestClient(app) as c:
-        with c.stream("POST", "/v1/completions", json={"model": "margAI/openai/gpt-4o", "prompt": "p", "stream": True}) as r:
-            assert r.status_code == 200
-            assert r.headers["content-type"].startswith("text/event-stream")
-            lines = [l for l in r.iter_lines() if l]
-            texts = [
-                json.loads(l[len("data: ") :])["choices"][0]["text"]
-                for l in lines
-                if l.startswith("data: ") and not l.startswith("data: [DONE]")
-            ]
-            assert texts == ["ap", "ple"]
-            assert lines[-1] == "data: [DONE]"
+    with TestClient(app) as c, c.stream(
+        "POST", "/v1/completions", json={"model": CHAT_MODEL, "prompt": "p", "stream": True}
+    ) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        lines = [ln for ln in r.iter_lines() if ln]
+        texts = [
+            json.loads(ln[len("data: ") :])["choices"][0]["text"]
+            for ln in lines
+            if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
+        ]
+        assert texts == ["ap", "ple"]
+        assert lines[-1] == "data: [DONE]"
 
 
 def test_completions_invalid_json_returns_400(client):

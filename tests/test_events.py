@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 
+from conftest import FakeStream, FakeTransport, chat_payload, chunk_payload, make_wrapper
+
 from margAI import EventHandler, EventRegistry, Tag, install_bangtags
 from margAI.core.protocol import UpstreamResponse
-
-from conftest import FakeStream, FakeTransport, chat_payload, chunk_payload, make_wrapper
 
 
 class _Ctx:
@@ -205,7 +205,8 @@ def test_wrapper_events_describe_docs():
 
 
 def test_install_bangtags_end_to_end():
-    wrapper = make_wrapper(FakeTransport(responses=[UpstreamResponse(200, chat_payload("hi"))]))
+    transport = FakeTransport(responses=[UpstreamResponse(200, chat_payload("hi"))])
+    wrapper = make_wrapper(transport)
     install_bangtags(wrapper)
 
     @wrapper.after("shout")
@@ -217,7 +218,7 @@ def test_install_bangtags_end_to_end():
         res = await wrapper.complete(
             {"model": "margAI/openai/gpt-4o", "messages": [{"role": "user", "content": "x !margAI: shout"}]}
         )
-        return res, wrapper.transport.requested[-1].json
+        return res, transport.requested[-1].json
 
     res, upstream = asyncio.run(go())
     assert res.body["choices"][0]["message"]["content"] == "hi!"
@@ -242,8 +243,7 @@ def test_wrapper_add_handler_uses_event_handler_group():
         ctx.state["bangtags"] = [Tag("tick"), Tag("tock")]
 
     async def go():
-        res = await wrapper.complete({"model": "margAI/openai/gpt-4o", "messages": []})
-        return res
+        return await wrapper.complete({"model": "margAI/openai/gpt-4o", "messages": []})
 
     res = asyncio.run(go())
     assert res.body["choices"][0]["message"]["content"] == "hi?"

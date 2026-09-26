@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -45,7 +46,9 @@ class CallRecord:
 
 
 class Telemetry:
-    def __init__(self, config: TelemetryConfig, *, callback=None) -> None:
+    def __init__(
+        self, config: TelemetryConfig, *, callback: Callable[[CallRecord], None] | None = None
+    ) -> None:
         self.config = config
         self._emit = config.emit
         self._callback = callback

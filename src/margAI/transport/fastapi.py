@@ -10,11 +10,11 @@ generation, and audio transcription -- see ``docs/ENDPOINTS.md``.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal
 
-from fastapi import FastAPI, Request, File, UploadFile, Body
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import Body, FastAPI, File, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import Config, load_config
@@ -32,11 +32,11 @@ ERROR_HEADERS = {"X-Accel-Buffering": "no"}
 
 class ChatCompletionMessageParam(BaseModel):
     role: Literal["system", "user", "assistant", "developer", "function", "tool"]
-    content: Optional[Union[str, list[dict[str, Any]]]] = None
-    name: Optional[str] = None
-    tool_calls: Optional[list[dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
-    function_call: Optional[dict[str, Any]] = None
+    content: str | list[dict[str, Any]] | None = None
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    function_call: dict[str, Any] | None = None
 
 
 class ChatCompletionToolParam(BaseModel):
@@ -47,76 +47,76 @@ class ChatCompletionToolParam(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatCompletionMessageParam]
-    frequency_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
-    logit_bias: Optional[dict[str, int]] = None
-    logprobs: Optional[bool] = None
-    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
-    max_tokens: Optional[int] = Field(default=None, ge=1)
-    max_completion_tokens: Optional[int] = Field(default=None, ge=1)
-    n: Optional[int] = Field(default=1, ge=1, le=128)
-    presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
-    response_format: Optional[dict[str, Any]] = None
-    seed: Optional[int] = None
-    stop: Optional[Union[str, list[str]]] = None
-    stream: Optional[bool] = False
-    stream_options: Optional[dict[str, Any]] = None
-    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    tools: Optional[list[ChatCompletionToolParam]] = None
-    tool_choice: Optional[Union[Literal["none", "auto", "required"], dict[str, Any]]] = None
-    user: Optional[str] = None
-    parallel_tool_calls: Optional[bool] = None
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    logit_bias: dict[str, int] | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = Field(default=None, ge=0, le=20)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_completion_tokens: int | None = Field(default=None, ge=1)
+    n: int | None = Field(default=1, ge=1, le=128)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    response_format: dict[str, Any] | None = None
+    seed: int | None = None
+    stop: str | list[str] | None = None
+    stream: bool | None = False
+    stream_options: dict[str, Any] | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    tools: list[ChatCompletionToolParam] | None = None
+    tool_choice: Literal["none", "auto", "required"] | dict[str, Any] | None = None
+    user: str | None = None
+    parallel_tool_calls: bool | None = None
 
 
 class CompletionRequest(BaseModel):
     model: str
-    prompt: Union[str, list[str], list[int], list[list[int]]]
-    best_of: Optional[int] = Field(default=None, ge=1)
-    echo: Optional[bool] = False
-    frequency_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
-    logit_bias: Optional[dict[str, int]] = None
-    logprobs: Optional[int] = Field(default=None, ge=0, le=5)
-    max_tokens: Optional[int] = Field(default=None, ge=1)
-    n: Optional[int] = Field(default=1, ge=1, le=128)
-    presence_penalty: Optional[float] = Field(default=None, ge=-2.0, le=2.0)
-    seed: Optional[int] = None
-    stop: Optional[Union[str, list[str]]] = None
-    stream: Optional[bool] = False
-    stream_options: Optional[dict[str, Any]] = None
-    suffix: Optional[str] = None
-    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    user: Optional[str] = None
+    prompt: str | list[str] | list[int] | list[list[int]]
+    best_of: int | None = Field(default=None, ge=1)
+    echo: bool | None = False
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    logit_bias: dict[str, int] | None = None
+    logprobs: int | None = Field(default=None, ge=0, le=5)
+    max_tokens: int | None = Field(default=None, ge=1)
+    n: int | None = Field(default=1, ge=1, le=128)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    seed: int | None = None
+    stop: str | list[str] | None = None
+    stream: bool | None = False
+    stream_options: dict[str, Any] | None = None
+    suffix: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    user: str | None = None
 
 
 class EmbeddingRequest(BaseModel):
-    input: Union[str, list[str], list[int], list[list[int]]]
+    input: str | list[str] | list[int] | list[list[int]]
     model: str
-    encoding_format: Optional[Literal["float", "base64"]] = "float"
-    dimensions: Optional[int] = None
-    user: Optional[str] = None
+    encoding_format: Literal["float", "base64"] | None = "float"
+    dimensions: int | None = None
+    user: str | None = None
 
 
 class ImageGenerationRequest(BaseModel):
     model: str
     prompt: str
-    n: Optional[int] = Field(default=1, ge=1, le=10)
-    quality: Optional[Literal["standard", "hd"]] = "standard"
-    response_format: Optional[Literal["url", "b64_json"]] = "url"
-    size: Optional[Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"]] = "1024x1024"
-    style: Optional[Literal["vivid", "natural"]] = "vivid"
-    user: Optional[str] = None
+    n: int | None = Field(default=1, ge=1, le=10)
+    quality: Literal["standard", "hd"] | None = "standard"
+    response_format: Literal["url", "b64_json"] | None = "url"
+    size: Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"] | None = "1024x1024"
+    style: Literal["vivid", "natural"] | None = "vivid"
+    user: str | None = None
 
 
 class AudioTranscriptionRequest(BaseModel):
     """The non-file fields of a ``multipart/form-data`` transcription."""
 
     model: str
-    language: Optional[str] = None
-    prompt: Optional[str] = None
-    response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = "json"
-    temperature: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    timestamp_granularities: Optional[list[Literal["word", "segment"]]] = None
+    language: str | None = None
+    prompt: str | None = None
+    response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] | None = "json"
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+    timestamp_granularities: list[Literal["word", "segment"]] | None = None
 
 
 # =============================================================================
@@ -128,7 +128,7 @@ class ModelResponse(BaseModel):
     object: str = "model"
     created: int
     owned_by: str
-    parent: Optional[str] = None
+    parent: str | None = None
 
 
 class ModelsResponse(BaseModel):
@@ -253,11 +253,11 @@ def build_app(wrapper: Wrapper | None = None, config: Config | None = None) -> F
     async def audio_transcriptions(
         file: UploadFile = File(...),
         model: str = Body(...),
-        language: Optional[str] = Body(default=None),
-        prompt: Optional[str] = Body(default=None),
-        response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = Body(default="json"),
-        temperature: Optional[float] = Body(default=None, ge=0.0, le=1.0),
-        timestamp_granularities: Optional[str] = Body(default=None),
+        language: str | None = Body(default=None),
+        prompt: str | None = Body(default=None),
+        response_format: Literal["json", "text", "srt", "verbose_json", "vtt"] | None = Body(default="json"),
+        temperature: float | None = Body(default=None, ge=0.0, le=1.0),
+        timestamp_granularities: str | None = Body(default=None),
     ):
         content = await file.read()
         if not content:
@@ -286,7 +286,7 @@ def build_app(wrapper: Wrapper | None = None, config: Config | None = None) -> F
                 handle = await wrapper.open_stream(body, kind=kind)
             except ApiError as exc:
                 return JSONResponse(content=exc.body, status_code=exc.status)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception:  # pragma: no cover - defensive
                 return _error_response(500, "Internal error", "server_error")
             return StreamingResponse(
                 handle.lines(), media_type="text/event-stream", headers=ERROR_HEADERS

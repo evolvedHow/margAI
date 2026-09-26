@@ -131,7 +131,7 @@ class EventRegistry:
 
     # -- base-class support ------------------------------------------------
 
-    def add(self, handler: Any) -> "EventRegistry":
+    def add(self, handler: Any) -> EventRegistry:
         """Register every ``{event}_{name}`` method found on ``handler``
         (an instance -- methods are bound; a callable class works if its
         events are staticmethods)."""

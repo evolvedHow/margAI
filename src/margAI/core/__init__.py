@@ -7,7 +7,7 @@ Cloudflare Worker (which supplies its own transport implementation).
 """
 
 from .context import RequestContext
-from .errors import DONE, ApiError
+from .errors import DONE, ApiError, DoneSentinel
 from .events import EventHandler, EventRegistry
 from .hooks import HookKind, HookRegistry, maybe_await
 from .protocol import (
@@ -19,8 +19,9 @@ from .protocol import (
 from .router import ModelRouter, Route
 
 __all__ = [
-    "ApiError",
     "DONE",
+    "ApiError",
+    "DoneSentinel",
     "EventHandler",
     "EventRegistry",
     "HookKind",

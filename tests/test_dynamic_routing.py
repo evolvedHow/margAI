@@ -5,22 +5,25 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from conftest import FakeTransport, UpstreamResponse, chat_payload, make_wrapper, provider_config
 
 from margAI import install_bangtags
-from margAI.config import GatewayConfig
+from margAI.config import GatewayConfig, TelemetryConfig
 from margAI.core.errors import ApiError
 from margAI.core.intent import RoutingIntent
 from margAI.core.marglets import Marglet
 from margAI.core.router import Candidate, Route
 from margAI.routing import coerce_route
 from margAI.telemetry import Telemetry
-from margAI.config import TelemetryConfig
-
-from conftest import FakeTransport, UpstreamResponse, chat_payload, make_wrapper, provider_config
 
 MULTI = (
     provider_config(name="openai", models=("gpt-4o",), default_model="gpt-4o"),
-    provider_config(name="openrouter", base_url="http://or.test/v1", models=("gpt-4o", "llama3"), default_model="llama3"),
+    provider_config(
+        name="openrouter",
+        base_url="http://or.test/v1",
+        models=("gpt-4o", "llama3"),
+        default_model="llama3",
+    ),
     provider_config(name="local", base_url="http://local.test/v1", models=("qwen3",), default_model="qwen3"),
 )
 
@@ -133,6 +136,7 @@ def test_registration_order_breaks_order_ties():
 )
 def test_coerce_route_accepts_every_documented_shape(value):
     route = coerce_route(value, selector="s")
+    assert route is not None
     assert (route.provider, route.model) == ("local", "qwen3")
 
 
@@ -221,7 +225,11 @@ def test_marglet_can_steer_the_intent_before_routing():
     def steer(ctx, tag):
         ctx.steer(provider="local")
 
-    w.routing.add_selector(lambda i, c, ctx: (seen.append(i.describe()), c[0])[1], name="s")
+    def record_and_first(intent, candidates, ctx):
+        seen.append(intent.describe())
+        return candidates[0]
+
+    w.routing.add_selector(record_and_first, name="s")
     w.add_marglet(Marglet("local-only", before=steer))
     asyncio.run(w.complete(call(w, tag="local-only")))
     assert seen[0]["provider"] == "local"
@@ -229,11 +237,13 @@ def test_marglet_can_steer_the_intent_before_routing():
 
 
 def test_selector_only_for_scopes_it_to_matching_tags():
-    w, t = build(default_provider="openai")
+    w, _ = build(default_provider="openai")
     called: list[str] = []
-    w.routing.add_selector(
-        lambda i, c, ctx: (called.append("scoped"), "local/qwen3")[1], name="scoped", only_for=["premium"]
-    )
+    def scoped(intent, candidates, ctx):
+        called.append("scoped")
+        return "local/qwen3"
+
+    w.routing.add_selector(scoped, name="scoped", only_for=["premium"])
     asyncio.run(w.complete(call(w, tag="premium")))
     assert called == ["scoped"]
     called.clear()
@@ -246,7 +256,7 @@ def test_marglet_with_select_becomes_a_scoped_selector():
     seen: list[str] = []
 
     def pick(intent, cands, ctx):
-        seen.append(intent.tags and intent.tags[0] or "")
+        seen.append((intent.tags and intent.tags[0]) or "")
         return "local/qwen3"
 
     w.add_marglet(Marglet("go-local", before=lambda ctx, tag: None, select=pick, order=-5))
@@ -294,7 +304,8 @@ def test_telemetry_records_why_the_route_was_chosen():
 def test_telemetry_records_the_fallback_reason():
     records: list = []
     w, _ = build(
-        default_provider="local", telemetry=Telemetry(TelemetryConfig(enabled=True, emit="callback"), callback=records.append)
+        default_provider="local",
+        telemetry=Telemetry(TelemetryConfig(enabled=True, emit="callback"), callback=records.append),
     )
     asyncio.run(w.complete(call(w)))
     assert records[0].route_reason == "default_provider"
@@ -303,7 +314,11 @@ def test_telemetry_records_the_fallback_reason():
 def test_dynamic_flag_is_visible_on_the_context():
     w, _ = build(default_provider="local")
     seen: list[bool] = []
-    w.routing.add_selector(lambda i, c, ctx: (seen.append(ctx.dynamic), "local/qwen3")[1], name="s")
+    def record_dynamic(intent, candidates, ctx):
+        seen.append(ctx.dynamic)
+        return "local/qwen3"
+
+    w.routing.add_selector(record_dynamic, name="s")
     asyncio.run(w.complete(call(w)))
     assert seen == [True]
 
@@ -311,7 +326,11 @@ def test_dynamic_flag_is_visible_on_the_context():
 def test_non_dynamic_calls_bypass_the_chain_entirely():
     w, t = build(default_provider="openai")
     called: list[str] = []
-    w.routing.add_selector(lambda i, c, ctx: (called.append("x"), "local/qwen3")[1], name="s")
+    def record_and_route(intent, candidates, ctx):
+        called.append("x")
+        return "local/qwen3"
+
+    w.routing.add_selector(record_and_route, name="s")
     asyncio.run(w.complete(call(w, model="margAI/openai/gpt-4o")))
     assert called == []
     assert "upstream.test" in routed_to(t)
@@ -360,8 +379,9 @@ def test_stream_preflight_failure_runs_error_hooks_and_records_telemetry():
 
 def test_dynamic_streaming_call_routes_and_streams():
     w, _ = build(default_provider="local", responses=None)
-    from conftest import FakeStream, chunk_payload
     import json
+
+    from conftest import FakeStream, chunk_payload
 
     raw = [f"data: {json.dumps(chunk_payload('x'))}", "data: [DONE]"]
     t = w.transport

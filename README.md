@@ -236,3 +236,10 @@ The core never does I/O. Deployments supply a `Transport`:
   ~2-method `Transport` protocol over `fetch`.
 
 Running tests: `uv run pytest`.
+
+Linting and type checks (both configured in `pyproject.toml`):
+
+```sh
+uv run ruff check src tests
+uv run mypy src tests
+```

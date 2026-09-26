@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
+from enum import Enum
+from typing import Any, Final
 
-__all__ = ["DONE", "ApiError"]
+__all__ = ["DONE", "ApiError", "DoneSentinel"]
 
 
-class _Done:
-    """Sentinel returned by providers when the upstream stream ends."""
+class DoneSentinel(Enum):
+    """The value providers return to signal end-of-stream.
 
-    __slots__ = ()
+    An enum rather than a plain sentinel object so that type checkers can
+    narrow on `x is DONE` -- with an opaque object they cannot, and every
+    `parse_chunk` implementation would need a cast to pass its result on.
+    """
+
+    TOKEN = "done"
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return "<DONE>"
 
 
-DONE = _Done()
+DONE: Final[DoneSentinel] = DoneSentinel.TOKEN
 
 
 class ApiError(Exception):
@@ -60,7 +66,7 @@ class ApiError(Exception):
             }
         }
 
-    def with_body(self, body: dict[str, Any]) -> "ApiError":
+    def with_body(self, body: dict[str, Any]) -> ApiError:
         """A copy carrying ``body`` -- how an ``error`` hook takes over the
         response, including on the streaming path where the error is raised
         instead of returned."""
@@ -69,7 +75,7 @@ class ApiError(Exception):
         return clone
 
     @classmethod
-    def from_openai_body(cls, body: Any, implicit_status: int = 500) -> "ApiError":
+    def from_openai_body(cls, body: Any, implicit_status: int = 500) -> ApiError:
         """Best-effort parse of an upstream OpenAI-style error payload."""
         if isinstance(body, dict):
             err = body.get("error")

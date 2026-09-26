@@ -253,7 +253,7 @@ class ModelRouter:
 
 def _provider_default_model(router: ModelRouter, provider: str) -> str:
     prov = router.providers.get(provider)
-    default = getattr(prov, "config", None) and getattr(prov.config, "default_model", None)
+    default = getattr(getattr(prov, "config", None), "default_model", None)
     if default:
         return default
     raise ApiError(

@@ -46,12 +46,12 @@ from .wrapper import GatewayResponse, StreamHandle, Wrapper
 __version__ = "0.1.0"
 
 __all__ = [
+    "DONE",
     "ApiError",
     "CallRecord",
     "Candidate",
     "Config",
     "ConfigError",
-    "DONE",
     "EventHandler",
     "EventRegistry",
     "GatewayResponse",

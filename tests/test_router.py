@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from conftest import make_config, provider_config
 
 from margAI.core import ApiError, ModelRouter
 from margAI.core.router import Route
-
-from conftest import make_config, provider_config
 from margAI.providers import build_providers
 
 

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from conftest import FakeTransport, make_config, provider_config
 
 from margAI.core import DONE, ApiError
 from margAI.core.context import RequestContext
 from margAI.core.protocol import PreparedRequest, UpstreamResponse
 from margAI.providers import build_providers
-
-from conftest import FakeTransport, make_config, provider_config
 
 
 def provider(**kw):

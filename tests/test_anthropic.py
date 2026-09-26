@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from conftest import FakeTransport, make_config, provider_config
 
 from margAI.core import DONE, ApiError
 from margAI.core.context import RequestContext
 from margAI.core.protocol import UpstreamResponse
 from margAI.providers import build_providers
-
-from conftest import FakeTransport, make_config, provider_config
 
 
 def anthropic(**kw):
@@ -110,14 +109,16 @@ def test_parse_response_error_raises_with_nested_message():
 
 def test_parse_chunk_text_delta():
     p = anthropic()
-    chunk = p.parse_chunk('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"He"}}', ctx())
+    raw = 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"He"}}'
+    chunk = p.parse_chunk(raw, ctx())
     assert chunk["choices"][0]["delta"]["content"] == "He"
     assert chunk["object"] == "chat.completion.chunk"
 
 
 def test_parse_chunk_ignores_non_text_deltas_and_control_events():
     p = anthropic()
-    assert p.parse_chunk('data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}', ctx()) is None
+    raw = 'data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}'
+    assert p.parse_chunk(raw, ctx()) is None
     assert p.parse_chunk('data: {"type":"content_block_start","index":0}', ctx()) is None
     assert p.parse_chunk('data: {"type":"message_start"}', ctx()) is None
     assert p.parse_chunk('data: {"type":"ping"}', ctx()) is None
@@ -127,7 +128,8 @@ def test_parse_chunk_ignores_non_text_deltas_and_control_events():
 def test_parse_chunk_message_delta_carries_usage_and_stop():
     p = anthropic()
     chunk = p.parse_chunk(
-        'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"input_tokens":4,"output_tokens":9}}',
+        'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},'
+        '"usage":{"input_tokens":4,"output_tokens":9}}',
         ctx(),
     )
     assert chunk["choices"][0]["finish_reason"] == "length"
@@ -141,7 +143,9 @@ def test_parse_chunk_done_sentinel():
 
 def test_list_models_uses_transport():
     p = anthropic()
-    transport = FakeTransport(responses=[UpstreamResponse(200, {"data": [{"id": "claude-sonnet-4-5"}, {"id": "claude-opus-4"}]})])
+    transport = FakeTransport(
+        responses=[UpstreamResponse(200, {"data": [{"id": "claude-sonnet-4-5"}, {"id": "claude-opus-4"}]})]
+    )
 
     async def go():
         return await p.list_models(transport)

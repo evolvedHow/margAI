@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from ..config import ProviderConfig
-from ..core import DONE
+from ..core import DONE, DoneSentinel
 from ..core.errors import ApiError
 from ..core.protocol import PreparedRequest, Transport, UpstreamResponse
 
@@ -73,7 +73,7 @@ class Provider(ABC):
         """
 
     @abstractmethod
-    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | None:
+    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         """Map one raw SSE line to an OpenAI chunk dict.
 
         Return ``None`` to skip the line, or :data:`margAI.core.DONE` to end
@@ -91,7 +91,7 @@ class Provider(ABC):
     def parse_completion_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
         raise _unsupported(self.name, "/v1/completions")
 
-    def parse_completion_chunk(self, raw_line: str, ctx: Any) -> dict | None:
+    def parse_completion_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         raise _unsupported(self.name, "/v1/completions")
 
     def extract_usage(self, payload: dict) -> dict[str, Any]:
@@ -118,7 +118,7 @@ class OpenAICompatProvider(Provider):
     def parse_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
         return _openai_body(resp, {"choices": []})
 
-    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | None:
+    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         return _parse_sse_data_line(raw_line)
 
     # -- legacy completions --------------------------------------------------
@@ -129,7 +129,7 @@ class OpenAICompatProvider(Provider):
     def parse_completion_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
         return _openai_body(resp, {"choices": []})
 
-    def parse_completion_chunk(self, raw_line: str, ctx: Any) -> dict | None:
+    def parse_completion_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         return _parse_sse_data_line(raw_line)
 
     # -- embeddings ----------------------------------------------------------
@@ -227,7 +227,7 @@ def _unsupported(provider: str, endpoint: str) -> ApiError:
     )
 
 
-def _parse_sse_data_line(raw_line: str) -> dict | None:
+def _parse_sse_data_line(raw_line: str) -> dict | DoneSentinel | None:
     line = raw_line.strip()
     if not line or line.startswith(":"):
         return None  # keepalive or comment

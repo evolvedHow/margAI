@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,18 @@ class Config:
 
 VALID_EXPOSE = {"prefixed", "both", "raw"}
 VALID_EMIT = {"none", "log", "callback"}
+
+# Provider table keys that are lifted onto ProviderConfig fields; everything
+# else falls through to `extra`.
+_KNOWN_PROVIDER_KEYS = {
+    "kind",
+    "base_url",
+    "api_key_env",
+    "api_key",
+    "default_model",
+    "models",
+    "timeout",
+}
 
 _BOOL_ENV = {"1", "true", "yes", "on"}
 
@@ -216,7 +229,11 @@ def _parse_providers(raw: dict[str, Any], env: dict[str, str]) -> list[ProviderC
                 default_model=cfg.get("default_model"),
                 models=tuple(models),
                 timeout=float(timeout) if timeout is not None else None,
-                extra={k: v for k, v in cfg.items() if k not in {"kind", "base_url", "api_key_env", "api_key", "default_model", "models", "timeout"}},
+                extra={
+                    k: v
+                    for k, v in cfg.items()
+                    if k not in _KNOWN_PROVIDER_KEYS
+                },
             )
         )
     return providers
@@ -245,7 +262,7 @@ def _parse_costs(raw: dict[str, Any]) -> tuple[CostEntry, ...]:
 
 def load_config(
     source: str | os.PathLike[str] | None = None,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Config:
     """Load configuration from a TOML file (or defaults)."""
     env = dict(os.environ if env is None else env)

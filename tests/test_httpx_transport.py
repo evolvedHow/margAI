@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 
-from margAI.config import GatewayConfig
-
-from conftest import build_wrapper, chat_payload, chunk_payload, json_ok, sse_response
+import pytest
+from conftest import build_wrapper, chat_body, chat_payload, chunk_payload, json_ok, sse_response, user
 
 
 def test_request_through_httpx_transport():
@@ -18,7 +17,7 @@ def test_request_through_httpx_transport():
     import asyncio
 
     wrapper = build_wrapper(handler)
-    result = asyncio.run(wrapper.complete({"model": "margAI/openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]}))
+    result = asyncio.run(wrapper.complete(chat_body(user("hi"))))
     assert result.body["choices"][0]["message"]["content"] == "via httpx"
     assert result.body["usage"]["total_tokens"] == 2
 
@@ -88,7 +87,11 @@ def test_stream_through_httpx_transport():
         return [line async for line in handle.lines()]
 
     lines = asyncio.run(go())
-    payloads = [json.loads(l[len("data: ") :]) for l in lines if l.startswith("data: ") and not l.startswith("data: [DONE]")]
+    payloads = [
+        json.loads(ln[len("data: ") :])
+        for ln in lines
+        if ln.startswith("data: ") and not ln.startswith("data: [DONE]")
+    ]
     assert [p["choices"][0]["delta"].get("content") for p in payloads] == ["one", "two"]
     assert lines[-1] == "data: [DONE]\n\n"
 
@@ -102,9 +105,9 @@ def test_stream_error_before_first_byte():
     from margAI import ApiError
 
     wrapper = build_wrapper(handler)
-    try:
-        asyncio.run(wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": [], "stream": True}))
-        assert False, "expected ApiError"
-    except ApiError as exc:
-        assert exc.status == 400
-        assert exc.message == "nope"
+    # `assert False` inside a try/except would be stripped under `python -O`,
+    # making the test pass for the wrong reason.
+    with pytest.raises(ApiError) as excinfo:
+        asyncio.run(wrapper.open_stream(chat_body(stream=True)))
+    assert excinfo.value.status == 400
+    assert excinfo.value.message == "nope"

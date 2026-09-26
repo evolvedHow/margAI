@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
+from weakref import WeakKeyDictionary
 
 from .core.events import STATE_KEY
 
@@ -91,8 +93,13 @@ def remove_directive(text: str, directive: str) -> str:
     return re.sub(rf"\s*{re.escape(directive)}\s*", "", text).strip()
 
 
+# Idempotence guard, keyed per (app, namespace): the bookkeeping stays off the
+# host app, and installing a *second* namespace on the same app still works.
+_installed: WeakKeyDictionary[Any, set[str]] = WeakKeyDictionary()
+
+
 def install_bangtags(
-    app: object,
+    app: Any,
     *,
     namespace: str = BANGTAG_NS,
     state_key: str = STATE_KEY,
@@ -109,13 +116,14 @@ def install_bangtags(
     event dispatch, so tags are ready by the time ``before`` events (and
     therefore every marglet) run.
     """
-    if getattr(app, "_bangtags_installed", False):
-        return
-    app._bangtags_installed = True
     ns = namespace.lower()
+    seen = _installed.setdefault(app, set())
+    if ns in seen:
+        return
+    seen.add(ns)
 
     @app.before(name=f"bangtags:{ns}", order=order)
-    def parse_bangtags(ctx: object) -> None:  # pragma: no cover - trivial
+    def parse_bangtags(ctx: Any) -> None:  # pragma: no cover - trivial
         directive, tags = find_directive(_last_user_message(ctx) or "")
         if directive:
             _strip_directive(ctx, directive)
@@ -123,14 +131,14 @@ def install_bangtags(
         ctx.state.setdefault("margAI", {})["directive"] = directive
 
 
-def _last_user_message(ctx: object) -> str | None:
+def _last_user_message(ctx: Any) -> str | None:
     for msg in reversed(ctx.messages):
         if msg.get("role") == "user" and isinstance(msg.get("content"), str):
             return msg["content"]
     return None
 
 
-def _strip_directive(ctx: object, directive: str) -> None:
+def _strip_directive(ctx: Any, directive: str) -> None:
     for msg in reversed(ctx.messages):
         if msg.get("role") == "user" and isinstance(msg.get("content"), str):
             msg["content"] = remove_directive(msg["content"], directive)

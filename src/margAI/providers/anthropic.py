@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..core import DONE
+from ..core import DONE, DoneSentinel
 from ..core.errors import ApiError
 from ..core.protocol import PreparedRequest, Transport, UpstreamResponse
 from .openai_compat import Provider, _parse_sse_data_line
@@ -61,7 +61,7 @@ class AnthropicProvider(Provider):
             raise ApiError.from_openai_body(resp.body, implicit_status=status)
         return _anthropic_to_chat(resp.body, ctx.upstream_model), status
 
-    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | None:
+    def parse_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         data = _parse_sse_data_line(raw_line)
         if data is DONE:
             return DONE

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 
@@ -108,6 +108,37 @@ def sse_response(chunks: list[dict], done: bool = True) -> httpx.Response:
     if done:
         text_parts.append("data: [DONE]\n\n")
     return httpx.Response(200, content="".join(text_parts).encode(), headers={"content-type": "text/event-stream"})
+
+
+CHAT_MODEL = "margAI/openai/gpt-4o"
+
+SSE_DONE = "data: [DONE]"
+
+
+def sse_line(payload: dict) -> str:
+    """One `data:` frame, for feeding FakeStream directly."""
+    return f"data: {json.dumps(payload)}"
+
+
+def user(text: str) -> dict:
+    return {"role": "user", "content": text}
+
+
+def chat_body(*messages: dict, model: str = CHAT_MODEL, **extra) -> dict:
+    """A request body for the chat surface, with sane defaults.
+
+    Exists so the tests read as `chat_body(user("hi"))` instead of a
+    `{"model": ..., "messages": [...]}` literal on nearly every line.
+    """
+    return {"model": model, "messages": list(messages) or [user("hi")], **extra}
+
+
+def token_usage(prompt: int = 3, completion: int = 4, total: int | None = None) -> dict:
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total if total is not None else prompt + completion,
+    }
 
 
 def chat_payload(text: str = "hello", *, usage: dict | None = None, model: str = "echo") -> dict:

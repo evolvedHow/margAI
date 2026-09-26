@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from margAI.core import HookKind, HookRegistry, RequestContext, maybe_await
 from margAI.core.hooks import Hook
 
@@ -32,9 +30,18 @@ def test_request_hooks_run_forward():
 
 def test_response_hooks_run_in_reverse():
     reg = HookRegistry()
-    order = []
-    reg.register(HookKind.RESPONSE, lambda p, c: order.append("s1") or p, "s1", 0)
-    reg.register(HookKind.RESPONSE, lambda p, c: order.append("s2") or p, "s2", 0)
+    order: list[str] = []
+
+    def first(payload, ctx):
+        order.append("s1")
+        return payload
+
+    def second(payload, ctx):
+        order.append("s2")
+        return payload
+
+    reg.register(HookKind.RESPONSE, first, "s1", 0)
+    reg.register(HookKind.RESPONSE, second, "s2", 0)
 
     async def go():
         return await reg.apply_response({"a": 1}, ctx())
@@ -50,8 +57,7 @@ def test_stream_hook_can_drop_a_chunk():
     reg.register(HookKind.STREAM, lambda chunk, c: None if chunk["n"] == 2 else chunk, "drop2", 0)
 
     async def go():
-        out = await reg.apply_stream({"n": 2, "choices": []}, ctx())
-        return out
+        return await reg.apply_stream({"n": 2, "choices": []}, ctx())
 
     import asyncio
 
@@ -76,9 +82,18 @@ def test_explicit_order_shifts_relative_position():
 
 def test_stream_hooks_run_in_reverse():
     reg = HookRegistry()
-    order = []
-    reg.register(HookKind.STREAM, lambda chunk, c: order.append("a") or chunk, "a", 0)
-    reg.register(HookKind.STREAM, lambda chunk, c: order.append("b") or chunk, "b", 0)
+    order: list[str] = []
+
+    def first(chunk, ctx):
+        order.append("a")
+        return chunk
+
+    def second(chunk, ctx):
+        order.append("b")
+        return chunk
+
+    reg.register(HookKind.STREAM, first, "a", 0)
+    reg.register(HookKind.STREAM, second, "b", 0)
 
     async def go():
         await reg.apply_stream({"choices": []}, ctx())
