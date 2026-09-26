@@ -1,0 +1,52 @@
+# margAI example configuration with optimize hooks
+# Copy to ./margAI.toml and edit.
+
+[gateway]
+prefix = "margAI"               # namespace for model ids: margAI/<provider>/<model>
+expose = "prefixed"             # prefixed | both | raw
+timeout = 60.0                  # default upstream timeout (seconds)
+default_provider = "llamacpp"    # e.g. "openai" routes unprefixed/unknown models here
+models_cache_ttl = 300.0        # seconds /v1/models catalog is cached
+host = "127.0.0.1"
+port = 8002
+
+[telemetry]
+enabled = true
+emit = "log"                    # none | log | callback
+# callback = "myapp.telemetry:on_record"   # when emit = "callback"
+
+[telemetry.costs]               # optional $ per 1M tokens for cost estimates
+"openai/gpt-4o" = { in = 2.50, out = 10.00 }
+
+[hooks]
+load = ["margAI.examples.optimize_hooks"]  # loads the optimize hooks
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+models = ["gpt-4o", "gpt-4o-mini"]
+default_model = "gpt-4o"
+
+# Add more providers as needed:
+# [providers.anthropic]
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com/v1"
+# api_key_env = "ANTHROPIC_API_KEY"
+# models = ["claude-sonnet-4-5"]
+
+[providers.llamacpp]
+kind = "openai-compatible"
+# Windows-native llama.cpp serves an OpenAI-compatible API on 127.0.0.1:8080.
+# margAI runs with network_mode: host, and WSL2 mirrored mode means the
+# container's 127.0.0.1 IS the Windows loopback -- so this reaches llama.cpp
+# directly, with no relay and no host.docker.internal. A bridge network would
+# give the container its own, empty loopback and break this.
+#
+# To repoint at a different llama.cpp host, override per host without editing
+# this file:
+#   MARGAI_PROVIDER_BASE_URL_LLAMACPP=http://somewhere:8080/v1
+base_url = "http://127.0.0.1:8080/v1"
+# No auth: llama.cpp serves without a key. If you put one in front of it, set
+# the matching env var via api_key_env.
+models = ["qwen2.5-coder"]

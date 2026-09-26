@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from margai.config import ConfigError, load_config
+from margAI.config import ConfigError, load_config
 
 TOML = """
 [gateway]
@@ -34,7 +34,7 @@ default_model = "tiny"
 
 
 def write(tmp_path, text=TOML):
-    path = tmp_path / "margai.toml"
+    path = tmp_path / "margAI.toml"
     path.write_text(text)
     return path
 
@@ -74,12 +74,35 @@ def test_env_api_key_wins_over_env_name(tmp_path):
 def test_absent_file_uses_defaults(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = load_config(env={})
-    assert config.gateway.prefix == "marg"
+    assert config.gateway.prefix == "margAI"
     assert config.providers == ()
 
 
 def test_invalid_expose_rejected(tmp_path):
     bad = TOML.replace('expose = "both"', 'expose = "sideways"')
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, bad), env={})
+
+
+def test_invalid_env_expose_rejected(tmp_path):
+    with pytest.raises(ConfigError) as e:
+        load_config(write(tmp_path), env={"MARGAI_EXPOSE": "sideways"})
+    assert "MARGAI_EXPOSE" in str(e.value)
+
+
+def test_invalid_env_port_rejected(tmp_path):
+    with pytest.raises(ConfigError) as e:
+        load_config(write(tmp_path), env={"MARGAI_PORT": "not-a-number"})
+    assert "MARGAI_PORT" in str(e.value)
+
+
+def test_invalid_env_timeout_rejected(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path), env={"MARGAI_TIMEOUT": "soon"})
+
+
+def test_nonpositive_models_cache_ttl_rejected(tmp_path):
+    bad = TOML.replace("timeout = 30", "timeout = 30\nmodels_cache_ttl = 0")
     with pytest.raises(ConfigError):
         load_config(write(tmp_path, bad), env={})
 
@@ -120,7 +143,70 @@ def test_source_path_recorded(tmp_path):
     assert config.source == str(path)
 
 
-def test_margai_config_env_var(tmp_path, monkeypatch):
+PROVIDER_TOML = """
+[providers.ollama]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:11434/v1"
+"""
+
+
+def test_provider_base_url_env_override(tmp_path):
+    config = load_config(
+        write(tmp_path, PROVIDER_TOML),
+        env={"MARGAI_PROVIDER_BASE_URL_OLLAMA": "http://host.docker.internal:11435/v1"},
+    )
+    assert config.providers[0].base_url == "http://host.docker.internal:11435/v1"
+
+
+def test_provider_base_url_env_override_folds_non_alphanumerics(tmp_path):
+    toml = PROVIDER_TOML.replace("providers.ollama", "providers.my-local-vllm")
+    config = load_config(
+        write(tmp_path, toml),
+        env={"MARGAI_PROVIDER_BASE_URL_MY_LOCAL_VLLM": "http://10.0.0.5:8000/v1"},
+    )
+    assert config.providers[0].base_url == "http://10.0.0.5:8000/v1"
+
+
+def test_provider_base_url_env_override_ignored_when_blank(tmp_path):
+    config = load_config(
+        write(tmp_path, PROVIDER_TOML),
+        env={"MARGAI_PROVIDER_BASE_URL_OLLAMA": "   "},
+    )
+    assert config.providers[0].base_url == "http://127.0.0.1:11434/v1"
+
+
+def test_provider_base_url_env_override_does_not_leak_across_providers(tmp_path):
+    toml = """
+    [providers.ollama]
+    kind = "openai-compatible"
+    base_url = "http://127.0.0.1:11434/v1"
+
+    [providers.openai]
+    kind = "openai"
+    base_url = "https://api.openai.com/v1"
+    """
+    config = load_config(
+        write(tmp_path, toml),
+        env={"MARGAI_PROVIDER_BASE_URL_OLLAMA": "http://host.docker.internal:11435/v1"},
+    )
+    by_name = {p.name: p.base_url for p in config.providers}
+    assert by_name["ollama"] == "http://host.docker.internal:11435/v1"
+    assert by_name["openai"] == "https://api.openai.com/v1"
+
+
+def test_provider_base_url_env_override_satisfies_missing_base_url(tmp_path):
+    toml = """
+    [providers.ollama]
+    kind = "openai-compatible"
+    """
+    config = load_config(
+        write(tmp_path, toml),
+        env={"MARGAI_PROVIDER_BASE_URL_OLLAMA": "http://host.docker.internal:11435/v1"},
+    )
+    assert config.providers[0].base_url == "http://host.docker.internal:11435/v1"
+
+
+def test_margAI_config_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("MARGAI_CONFIG", str(write(tmp_path)))
     config = load_config(env=os.environ)
-    assert config.source == str(tmp_path / "margai.toml")
+    assert config.source == str(tmp_path / "margAI.toml")

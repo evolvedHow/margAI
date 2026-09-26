@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from margai.core import DONE, ApiError
-from margai.core.context import RequestContext
-from margai.core.protocol import PreparedRequest, UpstreamResponse
-from margai.providers import build_providers
+from margAI.core import DONE, ApiError
+from margAI.core.context import RequestContext
+from margAI.core.protocol import PreparedRequest, UpstreamResponse
+from margAI.providers import build_providers
 
 from conftest import FakeTransport, make_config, provider_config
 
@@ -35,10 +35,53 @@ def test_prepare_chat_omits_auth_without_key():
     assert "Authorization" not in req.headers
 
 
+def test_build_providers_resolves_api_key_env():
+    from margAI.providers import build_providers
+
+    cfg = make_config(providers=(provider_config(api_key=None, api_key_env="MARG_TEST_KEY"),))
+    providers = build_providers(cfg, env={"MARG_TEST_KEY": "sk-from-env"})
+    req = providers["openai"].prepare_chat(RequestContext(body={"messages": []}))
+    assert req.headers["Authorization"] == "Bearer sk-from-env"
+
+
+def test_build_providers_prefers_inline_api_key_over_env():
+    from margAI.providers import build_providers
+
+    cfg = make_config(
+        providers=(provider_config(api_key="sk-inline", api_key_env="MARG_TEST_KEY"),)
+    )
+    providers = build_providers(cfg, env={"MARG_TEST_KEY": "sk-from-env"})
+    req = providers["openai"].prepare_chat(RequestContext(body={"messages": []}))
+    assert req.headers["Authorization"] == "Bearer sk-inline"
+
+
+def test_build_providers_missing_env_sends_no_auth():
+    from margAI.providers import build_providers
+
+    cfg = make_config(providers=(provider_config(api_key=None, api_key_env="UNSET_VAR"),))
+    providers = build_providers(cfg, env={})
+    req = providers["openai"].prepare_chat(RequestContext(body={"messages": []}))
+    assert "Authorization" not in req.headers
+
+
 def test_extra_headers_merged():
     p = provider(api_key=None, extra={"headers": {"X-Custom": "1"}})
     req = p.prepare_chat(RequestContext(body={"messages": []}))
     assert req.headers["X-Custom"] == "1"
+
+
+def test_prepare_carries_provider_timeout():
+    p = provider(timeout=12.5)
+    req = p.prepare_chat(RequestContext(body={"messages": []}))
+    assert req.timeout == 12.5
+    req = p.prepare_completions(RequestContext(body={"prompt": "p"}))
+    assert req.timeout == 12.5
+
+
+def test_prepare_timeout_none_by_default():
+    p = provider()
+    req = p.prepare_chat(RequestContext(body={"messages": []}))
+    assert req.timeout is None  # transport default wins
 
 
 def test_parse_response_success():

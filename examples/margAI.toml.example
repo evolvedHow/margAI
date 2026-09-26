@@ -1,13 +1,13 @@
-# margai example configuration
-# Copy to ./margai.toml (or point MARGAI_CONFIG at it) and edit.
+# margAI example configuration
+# Copy to ./margAI.toml (or point MARGAI_CONFIG at it) and edit.
 
 [gateway]
-prefix = "marg"               # namespace for model ids: marg/<provider>/<model>
+prefix = "margAI"               # namespace for model ids: margAI/<provider>/<model>
 expose = "prefixed"           # prefixed | both | raw
 timeout = 60.0                # default upstream timeout (seconds)
 default_provider = ""         # e.g. "openai" routes unprefixed/unknown models here
 models_cache_ttl = 300.0      # seconds /v1/models catalog is cached
-# host and port are used by `uv run margai`:
+# host and port are used by `uv run margAI`:
 host = "0.0.0.0"
 port = 8000
 
@@ -23,11 +23,18 @@ emit = "log"                  # none | log | callback
 load = []                     # e.g. ["examples.simple_hooks"] or ["myapp.hooks:register"]
 
 [providers.my_openai]
-kind = "openai"               # openai | openai-compatible
+kind = "openai"               # openai | openai-compatible | anthropic
 base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 # models = ["gpt-4o", "gpt-4o-mini"]   # optional: static list (offline routing)
 # default_model = "gpt-4o"
+
+# Anthropic:
+# [providers.anthropic]
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com/v1"   # sends `x-api-key`, not Bearer
+# api_key_env = "ANTHROPIC_API_KEY"
+# models = ["claude-sonnet-4-5"]
 
 # A local OpenAI-compatible server (vLLM / Ollama / LM Studio):
 # [providers.local]

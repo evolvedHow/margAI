@@ -54,6 +54,9 @@ class ApiError(Exception):
         if isinstance(body, dict):
             err = body.get("error")
             if isinstance(err, dict):
+                # Some providers (Anthropic) nest further: error.error.{...}
+                if isinstance(err.get("error"), dict):
+                    err = err["error"]
                 return cls(
                     status=int(err.get("status") or implicit_status),
                     message=str(err.get("message") or "Upstream error"),

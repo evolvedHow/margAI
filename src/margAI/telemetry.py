@@ -18,7 +18,7 @@ from .config import TelemetryConfig
 
 __all__ = ["CallRecord", "Telemetry"]
 
-logger = logging.getLogger("margai.telemetry")
+logger = logging.getLogger("margAI.telemetry")
 
 
 @dataclass

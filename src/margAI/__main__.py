@@ -1,4 +1,4 @@
-"""CLI entry point: ``uv run margai``."""
+"""CLI entry point: ``uv run margAI``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def run() -> None:
         config = load_config()
         app = build_app(config=config)
     except ConfigError as exc:
-        raise SystemExit(f"margai: config error: {exc}") from exc
+        raise SystemExit(f"margAI: config error: {exc}") from exc
 
     uvicorn.run(app, host=config.gateway.host, port=config.gateway.port)
 

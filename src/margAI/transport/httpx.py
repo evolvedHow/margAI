@@ -4,7 +4,7 @@ and anywhere else a plain Python process can use httpx).
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -53,7 +53,7 @@ class HttpxTransport:
 
     def _build(self, req: PreparedRequest) -> httpx.Request:
         return self._client.build_request(
-            method=req.method, url=req.url, headers=req.headers, json=req.json, timeout=None
+            method=req.method, url=req.url, headers=req.headers, json=req.json, timeout=req.timeout
         )
 
     async def request(self, req: PreparedRequest) -> UpstreamResponse:

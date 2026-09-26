@@ -7,18 +7,18 @@ from typing import AsyncIterator, Callable
 
 import httpx
 
-from margai import Wrapper
-from margai.config import (
+from margAI import Wrapper
+from margAI.config import (
     Config,
     GatewayConfig,
     HookConfig,
     ProviderConfig,
     TelemetryConfig,
 )
-from margai.core.protocol import PreparedRequest, UpstreamResponse
-from margai.providers import build_providers
-from margai.telemetry import Telemetry
-from margai.transport.httpx import HttpxTransport
+from margAI.core.protocol import PreparedRequest, UpstreamResponse
+from margAI.providers import build_providers
+from margAI.telemetry import Telemetry
+from margAI.transport.httpx import HttpxTransport
 
 
 def provider_config(
@@ -28,7 +28,9 @@ def provider_config(
     base_url: str = "https://upstream.test/v1",
     models: tuple[str, ...] = ("gpt-4o", "gpt-4o-mini"),
     api_key: str | None = "sk-test",
+    api_key_env: str | None = None,
     default_model: str | None = None,
+    timeout: float | None = None,
     extra: dict | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
@@ -36,8 +38,10 @@ def provider_config(
         kind=kind,
         base_url=base_url,
         api_key=api_key,
+        api_key_env=api_key_env,
         models=models,
         default_model=default_model,
+        timeout=timeout,
         extra=extra or {},
     )
 
@@ -126,6 +130,29 @@ def chunk_payload(text: str, *, finish_reason: str | None = None) -> dict:
         "created": 1,
         "model": "echo",
         "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish_reason}],
+    }
+
+
+def completion_payload(text: str = "done", *, usage: dict | None = None, model: str = "echo") -> dict:
+    payload = {
+        "id": "cmpl-test",
+        "object": "text_completion",
+        "created": 1,
+        "model": model,
+        "choices": [{"index": 0, "text": text, "finish_reason": "stop"}],
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return payload
+
+
+def completion_chunk_payload(text: str = "", *, finish_reason: str | None = None) -> dict:
+    return {
+        "id": "cmpl-test",
+        "object": "text_completion",
+        "created": 1,
+        "model": "echo",
+        "choices": [{"index": 0, "text": text, "finish_reason": finish_reason}],
     }
 
 

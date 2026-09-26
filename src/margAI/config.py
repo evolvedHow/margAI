@@ -1,23 +1,28 @@
-"""Configuration loading for margai.
+"""Configuration loading for margAI.
 
-The framework is configured through a single TOML file (``margai.toml`` by
+The framework is configured through a single TOML file (``margAI.toml`` by
 default) plus environment variables. The core keeps configuration pure
 (``tomllib`` / dataclasses, stdlib only) so it stays portable.
 
 File resolution order:
     1. The ``source`` argument passed to :func:`load_config`
     2. The ``MARGAI_CONFIG`` environment variable
-    3. ``./margai.toml`` in the working directory (if present)
+    3. ``./margAI.toml`` in the working directory (if present)
     4. Built-in defaults (no file needed)
 
 Gateway-level settings can also be overridden with ``MARGAI_*`` environment
 variables (``MARGAI_HOST``, ``MARGAI_PORT``, ``MARGAI_PREFIX``,
 ``MARGAI_EXPOSE``, ``MARGAI_TIMEOUT``, ``MARGAI_DEFAULT_PROVIDER``).
+
+A provider's upstream endpoint can be overridden per-provider with
+``MARGAI_PROVIDER_BASE_URL_<NAME>`` (e.g. ``MARGAI_PROVIDER_BASE_URL_OLLAMA``).
+This keeps deployment-specific endpoints out of the static TOML file.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +48,7 @@ class ConfigError(Exception):
 class GatewayConfig:
     """Gateway-wide behavior."""
 
-    prefix: str = "marg"
+    prefix: str = "margAI"
     expose: str = "prefixed"
     timeout: float = 60.0
     host: str = "0.0.0.0"
@@ -116,13 +121,23 @@ def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
     if (v := env.get("MARGAI_HOST")) is not None:
         out["host"] = v
     if (v := env.get("MARGAI_PORT")) is not None:
-        out["port"] = int(v)
+        try:
+            out["port"] = int(v)
+        except ValueError:
+            raise ConfigError(f"MARGAI_PORT must be an integer, got '{v}'") from None
     if (v := env.get("MARGAI_PREFIX")) is not None:
         out["prefix"] = v
     if (v := env.get("MARGAI_EXPOSE")) is not None:
+        if v not in VALID_EXPOSE:
+            raise ConfigError(
+                f"MARGAI_EXPOSE must be one of {sorted(VALID_EXPOSE)}, got '{v}'"
+            )
         out["expose"] = v
     if (v := env.get("MARGAI_TIMEOUT")) is not None:
-        out["timeout"] = float(v)
+        try:
+            out["timeout"] = float(v)
+        except ValueError:
+            raise ConfigError(f"MARGAI_TIMEOUT must be numeric, got '{v}'") from None
     if (v := env.get("MARGAI_DEFAULT_PROVIDER")) is not None:
         out["default_provider"] = v or None
     return out
@@ -133,8 +148,24 @@ def _resolve_config_path(source: str | os.PathLike[str] | None, env: dict[str, s
         return Path(source)
     if (path := env.get("MARGAI_CONFIG")) is not None:
         return Path(path)
-    default = Path("margai.toml")
+    default = Path("margAI.toml")
     return default if default.exists() else None
+
+
+def _base_url_override(name: str, env: dict[str, str]) -> str | None:
+    """Per-provider ``base_url`` override from the environment.
+
+    A provider's upstream lives in the TOML file, which is static and
+    environment-agnostic. Deployment-specific endpoints (a local Ollama on
+    another port, a LAN vLLM) therefore need an env escape hatch:
+
+        MARGAI_PROVIDER_BASE_URL_OLLAMA=http://host.docker.internal:11435/v1
+
+    The provider name is upper-cased with non-alphanumerics folded to ``_``.
+    """
+    key = "MARGAI_PROVIDER_BASE_URL_" + re.sub(r"[^A-Za-z0-9]+", "_", name).upper()
+    value = env.get(key)
+    return value.strip() if value and value.strip() else None
 
 
 def _parse_providers(raw: dict[str, Any], env: dict[str, str]) -> list[ProviderConfig]:
@@ -146,7 +177,7 @@ def _parse_providers(raw: dict[str, Any], env: dict[str, str]) -> list[ProviderC
         if not isinstance(cfg, dict):
             raise ConfigError(f"provider '{name}' must be a table")
         kind = cfg.get("kind")
-        base_url = cfg.get("base_url")
+        base_url = _base_url_override(name, env) or cfg.get("base_url")
         if not kind or not isinstance(kind, str):
             raise ConfigError(f"provider '{name}': 'kind' is required")
         if not base_url or not isinstance(base_url, str):
@@ -165,6 +196,8 @@ def _parse_providers(raw: dict[str, Any], env: dict[str, str]) -> list[ProviderC
         timeout = cfg.get("timeout")
         if timeout is not None and not isinstance(timeout, (int, float)):
             raise ConfigError(f"provider '{name}': 'timeout' must be numeric")
+        if timeout is not None and float(timeout) <= 0:
+            raise ConfigError(f"provider '{name}': 'timeout' must be positive")
         providers.append(
             ProviderConfig(
                 name=name,
@@ -223,7 +256,7 @@ def load_config(
     gateway_raw = dict(raw.get("gateway", {}))
 
     gateway_kwargs: dict[str, Any] = {
-        "prefix": gateway_raw.pop("prefix", "marg"),
+        "prefix": gateway_raw.pop("prefix", "margAI"),
         "expose": gateway_raw.pop("expose", "prefixed"),
         "timeout": gateway_raw.pop("timeout", 60.0),
         "host": gateway_raw.pop("host", "0.0.0.0"),
@@ -239,6 +272,9 @@ def load_config(
     timeout = float(gateway_kwargs["timeout"])
     if timeout <= 0:
         raise ConfigError("gateway.timeout must be positive")
+    cache_ttl = float(gateway_kwargs["models_cache_ttl"])
+    if cache_ttl <= 0:
+        raise ConfigError("gateway.models_cache_ttl must be positive")
     gateway = GatewayConfig(**gateway_kwargs)
 
     telemetry_raw = dict(raw.get("telemetry", {}))

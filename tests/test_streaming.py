@@ -6,11 +6,12 @@ import json
 
 import pytest
 
-from margai import ApiError
-from margai.core.errors import DONE
-from margai.providers.openai_compat import OpenAICompatProvider
+from margAI import ApiError, Telemetry
+from margAI.config import TelemetryConfig
+from margAI.core.errors import DONE
+from margAI.providers.openai_compat import OpenAICompatProvider
 
-from conftest import FakeStream, FakeTransport, chunk_payload, make_wrapper
+from conftest import FakeStream, FakeTransport, chunk_payload, completion_chunk_payload, make_wrapper
 
 
 async def collect(handle):
@@ -42,7 +43,7 @@ def test_stream_hook_rewrites_and_forwards_chunks():
 
     import asyncio
 
-    handle = asyncio.run(wrapper.open_stream({"model": "marg/openai/gpt-4o", "messages": [], "stream": True}))
+    handle = asyncio.run(wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": [], "stream": True}))
     lines = asyncio.run(collect(handle))
     chunks = sse_json_bytes(lines)
     assert chunks[0]["choices"][0]["delta"]["content"] == "HE"
@@ -65,7 +66,7 @@ async def test_stream_can_drop_a_chunk():
             return None
         return chunk
 
-    lines = [line async for line in (await wrapper.open_stream({"model": "marg/openai/gpt-4o", "messages": []})).lines()]
+    lines = [line async for line in (await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []})).lines()]
     contents = [
         json.loads(l[len("data: ") :])["choices"][0]["delta"]["content"]
         for l in lines
@@ -81,7 +82,7 @@ async def test_open_stream_raises_on_upstream_error_status():
         )
     )
     with pytest.raises(ApiError) as e:
-        await wrapper.open_stream({"model": "marg/openai/gpt-4o", "messages": []})
+        await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []})
     assert e.value.status == 429
     assert e.value.message == "quota"
 
@@ -101,7 +102,7 @@ async def test_stream_error_hook_shapes_midstream_error():
     def on_error(exc, ctx):
         return {"error": {"message": "connection interrupted", "type": "upstream_error", "param": None, "code": None}}
 
-    lines = [line async for line in (await wrapper.open_stream({"model": "marg/openai/gpt-4o", "messages": []})).lines()]
+    lines = [line async for line in (await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []})).lines()]
     error_chunk = json.loads(lines[1][6:-2])
     assert error_chunk["error"]["message"] == "connection interrupted"
     assert lines[-1] == "data: [DONE]\n\n"
@@ -109,8 +110,8 @@ async def test_stream_error_hook_shapes_midstream_error():
 
 async def test_stream_emits_telemetry_with_usage_from_last_chunk():
     records = []
-    from margai import Telemetry
-    from margai.config import TelemetryConfig
+    from margAI import Telemetry
+    from margAI.config import TelemetryConfig
 
     tele = Telemetry(TelemetryConfig(enabled=True, emit="callback", callback="x"), callback=records.append)
     last = chunk_payload("bye", finish_reason="stop")
@@ -118,10 +119,31 @@ async def test_stream_emits_telemetry_with_usage_from_last_chunk():
     wrapper = make_wrapper(
         FakeTransport(streams=[FakeStream([f"data: {json.dumps(last)}", "data: [DONE]"])]), telemetry=tele
     )
-    await collect(await wrapper.open_stream({"model": "marg/openai/gpt-4o", "messages": []}))
+    await collect(await wrapper.open_stream({"model": "margAI/openai/gpt-4o", "messages": []}))
     assert records, "a stream that ends must emit a telemetry record"
     assert records[0].prompt_tokens == 5
     assert records[0].stream is True
+
+
+async def test_completions_stream_forwards_text_deltas():
+    raw = [
+        f"data: {json.dumps(completion_chunk_payload('ap'))}",
+        f"data: {json.dumps(completion_chunk_payload('ple', finish_reason='stop'))}",
+        "data: [DONE]",
+    ]
+    wrapper = make_wrapper(FakeTransport(streams=[FakeStream(raw)]))
+    handle = await wrapper.open_stream(
+        {"model": "margAI/openai/gpt-4o", "prompt": "p", "stream": True}, kind="completions"
+    )
+    lines = await collect(handle)
+    texts = [
+        json.loads(l[len("data: ") :])["choices"][0]["text"]
+        for l in lines
+        if l.startswith("data: ") and not l.startswith("data: [DONE]")
+    ]
+    assert texts == ["ap", "ple"]
+    assert lines[-1] == "data: [DONE]\n\n"
+    assert lines[0].startswith("data: {")  # SSE data frame preserved
 
 
 def test_parse_chunk_handles_framing(provider_instance):

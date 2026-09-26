@@ -12,7 +12,7 @@ or programmatically:
     register(wrapper)
 """
 
-from margai import Wrapper
+from margAI import Wrapper
 
 
 def register(wrapper: Wrapper) -> Wrapper:

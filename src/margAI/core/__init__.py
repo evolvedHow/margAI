@@ -1,6 +1,6 @@
-"""Pure-stdlib core of margai.
+"""Pure-stdlib core of margAI.
 
-Nothing in :mod:`margai.core` touches the network or depends on external
+Nothing in :mod:`margAI.core` touches the network or depends on external
 frameworks. Interceptors, routing, and the transport *contract* live here so
 the same core can be embedded behind FastAPI, a Modal endpoint, or a
 Cloudflare Worker (which supplies its own transport implementation).
@@ -8,6 +8,7 @@ Cloudflare Worker (which supplies its own transport implementation).
 
 from .context import RequestContext
 from .errors import DONE, ApiError
+from .events import EventHandler, EventRegistry
 from .hooks import HookKind, HookRegistry, maybe_await
 from .protocol import (
     PreparedRequest,
@@ -20,6 +21,8 @@ from .router import ModelRouter, Route
 __all__ = [
     "ApiError",
     "DONE",
+    "EventHandler",
+    "EventRegistry",
     "HookKind",
     "HookRegistry",
     "ModelRouter",

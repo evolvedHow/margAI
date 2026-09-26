@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from margai.core import ApiError, ModelRouter
-from margai.core.router import Route
+from margAI.core import ApiError, ModelRouter
+from margAI.core.router import Route
 
 from conftest import make_config, provider_config
-from margai.providers import build_providers
+from margAI.providers import build_providers
 
 
 def router(*profiles, expose="prefixed", default_provider=None):
     providers = build_providers(make_config(providers=tuple(profiles)))
-    return ModelRouter(providers, prefix="marg", expose=expose, default_provider=default_provider)
+    return ModelRouter(providers, prefix="margAI", expose=expose, default_provider=default_provider)
 
 
 @pytest.fixture
@@ -30,20 +30,20 @@ def multi():
 
 def test_resolve_namespaced(multi):
     r = router(*multi)
-    assert r.resolve("marg/openai/gpt-4o") == Route("openai", "gpt-4o")
-    assert r.resolve("marg/openrouter/meta-llama/llama-3-70b") == Route("openrouter", "meta-llama/llama-3-70b")
+    assert r.resolve("margAI/openai/gpt-4o") == Route("openai", "gpt-4o")
+    assert r.resolve("margAI/openrouter/meta-llama/llama-3-70b") == Route("openrouter", "meta-llama/llama-3-70b")
 
 
 def test_default_provider_breaks_tie(multi):
     r = router(*multi, default_provider="openai")
-    assert r.resolve("marg/openai/gpt-4o") == Route("openai", "gpt-4o")
+    assert r.resolve("margAI/openai/gpt-4o") == Route("openai", "gpt-4o")
 
 
 def test_provider_default_model():
     r = router(
         provider_config(name="openai", models=("gpt-4o",), default_model="gpt-4o")
     )
-    assert r.resolve("marg/openai").model == "gpt-4o"
+    assert r.resolve("margAI/openai").model == "gpt-4o"
 
 
 def test_unprefixed_rejected_by_default(multi):
@@ -73,7 +73,7 @@ def test_ambiguous_bare_model():
 def test_unknown_provider_hint(multi):
     func = router(*multi)
     with pytest.raises(ApiError) as e:
-        func.resolve("marg/notaprovider/gpt-4o")
+        func.resolve("margAI/notaprovider/gpt-4o")
     assert "notaprovider" in e.value.message
 
 
@@ -81,7 +81,7 @@ def test_catalog_prefixed_only(multi):
     r = router(*multi)
     items = r.catalog({"openai": ["gpt-4o"], "openrouter": ["meta-llama/llama-3-70b"]})
     ids = [i["id"] for i in items]
-    assert ids == ["marg/openai/gpt-4o", "marg/openrouter/meta-llama/llama-3-70b"]
+    assert ids == ["margAI/openai/gpt-4o", "margAI/openrouter/meta-llama/llama-3-70b"]
     assert all(i["parent"] for i in items)
 
 
@@ -89,7 +89,7 @@ def test_catalog_both_expose(multi):
     r = router(*multi, expose="both")
     items = r.catalog({"openai": ["gpt-4o"]})
     ids = [i["id"] for i in items]
-    assert ids == ["marg/openai/gpt-4o", "gpt-4o"]
+    assert ids == ["margAI/openai/gpt-4o", "gpt-4o"]
 
 
 def test_no_model_specified(multi):

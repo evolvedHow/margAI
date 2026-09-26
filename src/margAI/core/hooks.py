@@ -27,7 +27,6 @@ from enum import Enum
 from typing import Any, Callable
 
 from .context import RequestContext
-from .errors import ApiError
 
 __all__ = ["HookKind", "HookRegistry", "maybe_await"]
 

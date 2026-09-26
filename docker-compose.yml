@@ -1,0 +1,55 @@
+name: margai
+
+# ============================================================================
+# margAI - Custom LLM Gateway/Proxy
+# ============================================================================
+# OpenAI-compatible API that routes to multiple LLM providers with optimization
+# hooks. Optional -- LibreChat and open-notebook both talk to llama.cpp directly
+# and do not need it.
+#
+# USAGE:
+#   cd ~/codebox/margAI && docker compose up -d
+#   curl http://127.0.0.1:8002/v1/models
+#   docker compose stop          # leave it runnable but idle
+#
+# It depends on nothing in ~/docker/shared -- its only upstream is the
+# Windows-native llama.cpp.
+# ============================================================================
+
+services:
+  margai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: margai
+    restart: unless-stopped
+    # Host network mode to reach Windows llama.cpp on 127.0.0.1:8080.
+    #
+    # WSL2 mirrored mode means WSL and Windows share one loopback, so this
+    # container's 127.0.0.1 IS the Windows loopback. A bridge network would
+    # give the container its own, empty loopback and break upstream access.
+    #
+    # Host mode ignores `ports:` and `extra_hosts:`, so neither appears here.
+    # margAI binds 127.0.0.1:8002 itself (see `host` in margAI.toml), which
+    # keeps it off the LAN -- binding 0.0.0.0 under host mode would publish it.
+    network_mode: host
+    environment:
+      # Upstream llama.cpp, overridable per host without editing margAI.toml.
+      - MARGAI_PROVIDER_BASE_URL_LLAMACPP=${MARGAI_LLAMACPP_URL:-http://127.0.0.1:8080/v1}
+      # API keys for the cloud providers (optional)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+    volumes:
+      - ./margAI.toml:/app/margAI.toml:ro
+      - ./src:/app/src:ro
+    # python:3.12-slim has no curl. Use the interpreter that is definitely
+    # present, otherwise the healthcheck fails with
+    # `exec: "curl": executable file not found` and the container is
+    # permanently "unhealthy" even when serving fine.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8002/v1/models',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

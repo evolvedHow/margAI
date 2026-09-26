@@ -1,4 +1,4 @@
-"""margai -- portable LLM wrapper framework.
+"""margAI -- portable LLM wrapper framework.
 
 A wrapper is a reusable layer of interceptors around any upstream LLM
 (OpenAI, OpenRouter, vLLM, Ollama, ...). Expose it locally or on Modal behind
@@ -7,19 +7,22 @@ Cloudflare Worker with a custom transport.
 
 Quick start:
 
-    from margai import Wrapper, build_app
-    from margai.config import load_config
+    from margAI import Wrapper, build_app
+    from margAI.config import load_config
 
     app = build_app(config=load_config())
 
-Or via the CLI: ``uv run margai`` (config from ``margai.toml`` or
+Or via the CLI: ``uv run margAI`` (config from ``margAI.toml`` or
 ``MARGAI_CONFIG``).
 """
 
+from .bangtag import Tag, find_directive, install_bangtags, remove_directive
 from .config import Config, ConfigError, load_config
 from .core import (
     DONE,
     ApiError,
+    EventHandler,
+    EventRegistry,
     HookKind,
     HookRegistry,
     ModelRouter,
@@ -44,6 +47,8 @@ __all__ = [
     "Config",
     "ConfigError",
     "DONE",
+    "EventHandler",
+    "EventRegistry",
     "GatewayResponse",
     "HookKind",
     "HookRegistry",
@@ -52,6 +57,7 @@ __all__ = [
     "RequestContext",
     "Route",
     "StreamHandle",
+    "Tag",
     "Telemetry",
     "Transport",
     "UpstreamResponse",
@@ -60,6 +66,9 @@ __all__ = [
     "__version__",
     "build_app",
     "build_providers",
+    "find_directive",
+    "install_bangtags",
     "load_config",
     "maybe_await",
+    "remove_directive",
 ]

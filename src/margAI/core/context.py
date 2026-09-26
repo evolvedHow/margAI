@@ -18,7 +18,7 @@ class RequestContext:
       replacement dict from a ``request`` hook.
     - ``state``: arbitrary scratch space private to one call. Use this to
       thread data from a ``request`` hook to a ``response``/``stream`` hook
-      (this is the ``ctx.state`` pattern from the original margai sketch).
+      (this is the ``ctx.state`` pattern from the original margAI sketch).
     - ``provider`` / ``upstream_model`` / ``request_model``: populated by the
       router before transport is reached.
     """
@@ -35,6 +35,11 @@ class RequestContext:
     @property
     def messages(self) -> list[dict[str, Any]]:
         return self.body.get("messages", [])
+
+    @property
+    def prompt(self) -> Any:
+        """The legacy-completions prompt (``/v1/completions``); None on chat calls."""
+        return self.body.get("prompt")
 
     def add_system_prompt(self, text: str, *, prepend: bool = True) -> None:
         """Insert or merge a system message.

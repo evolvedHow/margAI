@@ -1,0 +1,42 @@
+# margAI example configuration with optimize hooks
+# Copy to ./margAI.toml and edit.
+
+[gateway]
+prefix = "margAI"               # namespace for model ids: margAI/<provider>/<model>
+expose = "prefixed"             # prefixed | both | raw
+timeout = 60.0                  # default upstream timeout (seconds)
+default_provider = "local"     # e.g. "openai" routes unprefixed/unknown models here
+models_cache_ttl = 300.0        # seconds /v1/models catalog is cached
+host = "0.0.0.0"
+port = 8001
+
+[telemetry]
+enabled = true
+emit = "log"                    # none | log | callback
+# callback = "myapp.telemetry:on_record"   # when emit = "callback"
+
+[telemetry.costs]               # optional $ per 1M tokens for cost estimates
+"openai/gpt-4o" = { in = 2.50, out = 10.00 }
+
+[hooks]
+load = ["examples.optimize_hooks"]  # loads the optimize hooks
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+models = ["gpt-4o", "gpt-4o-mini"]
+default_model = "gpt-4o"
+
+# Add more providers as needed:
+# [providers.anthropic]
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com/v1"
+# api_key_env = "ANTHROPIC_API_KEY"
+# models = ["claude-sonnet-4-5"]
+
+[providers.local]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:8080/v1"
+api_key_env = ""
+models = ["qwen2.5-coder"]

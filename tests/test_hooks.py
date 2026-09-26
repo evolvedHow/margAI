@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from margai.core import HookKind, HookRegistry, RequestContext, maybe_await
-from margai.core.hooks import Hook
+from margAI.core import HookKind, HookRegistry, RequestContext, maybe_await
+from margAI.core.hooks import Hook
 
 
 def ctx(body=None):

@@ -21,6 +21,7 @@ class PreparedRequest:
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     json: Any = None
+    timeout: float | None = None  # per-request override; None -> transport default
 
 
 @dataclass

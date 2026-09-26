@@ -29,7 +29,7 @@ class ModelRouter:
     def __init__(
         self,
         providers: dict[str, Any],
-        prefix: str = "marg",
+        prefix: str = "margAI",
         expose: str = "prefixed",
         default_provider: str | None = None,
     ) -> None:
