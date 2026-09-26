@@ -12,7 +12,8 @@ File resolution order:
 
 Gateway-level settings can also be overridden with ``MARGAI_*`` environment
 variables (``MARGAI_HOST``, ``MARGAI_PORT``, ``MARGAI_PREFIX``,
-``MARGAI_EXPOSE``, ``MARGAI_TIMEOUT``, ``MARGAI_DEFAULT_PROVIDER``).
+``MARGAI_EXPOSE``, ``MARGAI_TIMEOUT``, ``MARGAI_DEFAULT_PROVIDER``,
+``MARGAI_DYNAMIC_MODEL``).
 
 A provider's upstream endpoint can be overridden per-provider with
 ``MARGAI_PROVIDER_BASE_URL_<NAME>`` (e.g. ``MARGAI_PROVIDER_BASE_URL_OLLAMA``).
@@ -55,6 +56,9 @@ class GatewayConfig:
     port: int = 8000
     default_provider: str | None = None
     models_cache_ttl: float = 300.0
+    # The reserved model id whose target is picked per call by the selector
+    # chain. Clients send "<prefix>/<this>" (e.g. "margAI/dynamic").
+    dynamic_model: str = "dynamic"
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,10 @@ def _env_overrides(env: dict[str, str]) -> dict[str, Any]:
             raise ConfigError(f"MARGAI_TIMEOUT must be numeric, got '{v}'") from None
     if (v := env.get("MARGAI_DEFAULT_PROVIDER")) is not None:
         out["default_provider"] = v or None
+    if (v := env.get("MARGAI_DYNAMIC_MODEL")) is not None:
+        if not v.strip():
+            raise ConfigError("MARGAI_DYNAMIC_MODEL must not be empty")
+        out["dynamic_model"] = v.strip()
     return out
 
 
@@ -263,6 +271,7 @@ def load_config(
         "port": gateway_raw.pop("port", 8000),
         "default_provider": gateway_raw.pop("default_provider", None),
         "models_cache_ttl": gateway_raw.pop("models_cache_ttl", 300.0),
+        "dynamic_model": gateway_raw.pop("dynamic_model", "dynamic"),
     }
     gateway_kwargs.update(_env_overrides(env))
 
@@ -275,6 +284,8 @@ def load_config(
     cache_ttl = float(gateway_kwargs["models_cache_ttl"])
     if cache_ttl <= 0:
         raise ConfigError("gateway.models_cache_ttl must be positive")
+    if not str(gateway_kwargs["dynamic_model"]).strip():
+        raise ConfigError("gateway.dynamic_model must not be empty")
     gateway = GatewayConfig(**gateway_kwargs)
 
     telemetry_raw = dict(raw.get("telemetry", {}))

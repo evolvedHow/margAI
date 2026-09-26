@@ -36,6 +36,11 @@ class CallRecord:
     status: int = 200
     error: str | None = None
     cost_usd: float | None = None
+    # Which marglets the call activated, and why the router landed where it
+    # did. Without these, a `dynamic` call is unattributable: the record would
+    # show a provider nobody asked for and no hint that policy chose it.
+    marglets: tuple[str, ...] = ()
+    route_reason: str = ""
     created_at: float = field(default_factory=time.time)
 
 

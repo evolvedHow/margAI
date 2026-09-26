@@ -32,11 +32,11 @@ _SYSTEM_ROLES = {"system", "developer"}
 class AnthropicProvider(Provider):
     """Anything that speaks Anthropic's ``/v1/messages`` API."""
 
-    def headers(self) -> dict[str, str]:
+    def headers(self, *, json_body: bool = True) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
-        }
+        } if json_body else {"anthropic-version": ANTHROPIC_VERSION}
         extra = self.config.extra
         if isinstance(extra, dict) and isinstance(extra.get("headers"), dict):
             headers.update({str(k): str(v) for k, v in extra["headers"].items()})

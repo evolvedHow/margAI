@@ -22,6 +22,8 @@ class PreparedRequest:
     headers: dict[str, str] = field(default_factory=dict)
     json: Any = None
     timeout: float | None = None  # per-request override; None -> transport default
+    data: dict[str, str] | None = None  # multipart form fields; mutually exclusive with json
+    files: Any = None  # multipart file parts, e.g. {"file": (name, bytes, type)}
 
 
 @dataclass

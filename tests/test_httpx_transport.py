@@ -68,7 +68,9 @@ def test_models_falls_back_to_configured_on_discovery_failure():
 
     wrapper = build_wrapper(handler)
     ids = [m["id"] for m in asyncio.run(wrapper.models())]
-    assert ids == ["margAI/openai/gpt-4o", "margAI/openai/gpt-4o-mini"]
+    # Discovery failed, so the configured list is used. The reserved dynamic id
+    # is always advertised so clients can find it in a model dropdown.
+    assert ids == ["margAI/dynamic", "margAI/openai/gpt-4o", "margAI/openai/gpt-4o-mini"]
 
 
 def test_stream_through_httpx_transport():

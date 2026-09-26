@@ -20,7 +20,13 @@ DONE = _Done()
 
 
 class ApiError(Exception):
-    """An error that maps to a JSON (OpenAI-compatible) error body."""
+    """An error that maps to a JSON (OpenAI-compatible) error body.
+
+    ``ctx`` is attached by the wrapper when the failure happens after a
+    context exists, so error hooks and telemetry can see which call failed
+    (which model it asked for, which marglets it activated) even when the
+    failure was raised before the upstream was ever reached.
+    """
 
     def __init__(
         self,
@@ -29,6 +35,8 @@ class ApiError(Exception):
         error_type: str = "server_error",
         param: str | None = None,
         code: str | None = None,
+        *,
+        body: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -36,9 +44,13 @@ class ApiError(Exception):
         self.error_type = error_type
         self.param = param
         self.code = code
+        self._body = body
+        self.ctx: Any = None
 
     @property
     def body(self) -> dict[str, Any]:
+        if self._body is not None:
+            return self._body
         return {
             "error": {
                 "message": self.message,
@@ -47,6 +59,14 @@ class ApiError(Exception):
                 "code": self.code,
             }
         }
+
+    def with_body(self, body: dict[str, Any]) -> "ApiError":
+        """A copy carrying ``body`` -- how an ``error`` hook takes over the
+        response, including on the streaming path where the error is raised
+        instead of returned."""
+        clone = ApiError(self.status, self.message, self.error_type, self.param, self.code, body=body)
+        clone.ctx = self.ctx
+        return clone
 
     @classmethod
     def from_openai_body(cls, body: Any, implicit_status: int = 500) -> "ApiError":

@@ -96,13 +96,24 @@ def test_non_dict_body_returns_400(client):
     assert resp.status_code == 400
 
 
-def test_unprefixed_model_404(client):
+def test_bare_model_id_is_accepted_despite_prefixed_expose(client):
+    """`expose` controls what /v1/models *lists*, not what the router accepts.
+
+    Conflating the two meant `expose = "prefixed"` silently rejected every bare
+    model id even with a default_provider set, and told the operator nowhere.
+    """
     resp = client.post(
         "/v1/chat/completions", json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
     )
+    assert resp.status_code == 200
+
+
+def test_unknown_model_still_404s(client):
+    resp = client.post(
+        "/v1/chat/completions", json={"model": "no-such-model", "messages": [{"role": "user", "content": "hi"}]}
+    )
     assert resp.status_code == 404
-    body = resp.json()
-    assert "error" in body
+    assert "error" in resp.json()
 
 
 def test_upstream_error_propagates_status(client):

@@ -300,4 +300,4 @@ def test_models_cache_invalidation():
     wrapper.invalidate_models_cache()
     third = asyncio.run(wrapper.models())
     assert len(calls) == 2
-    assert third[0]["id"] == "margAI/openai/gpt-fresh"
+    assert "margAI/openai/gpt-fresh" in [m["id"] for m in third]

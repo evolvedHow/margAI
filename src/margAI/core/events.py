@@ -46,11 +46,14 @@ Tags are duck-typed -- anything carrying a ``.name`` (and optionally a
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any
 
 from .hooks import maybe_await
 
 __all__ = ["EventHandler", "EventRegistry"]
+
+logger = logging.getLogger("margAI.events")
 
 EVENTS = ("before", "after", "stream", "error")
 
@@ -66,13 +69,32 @@ class EventRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, dict[str, Any]] = {event: {} for event in EVENTS}
 
+    def _put(self, event: str, name: str, fn: Any) -> None:
+        """Register a handler, warning on replacement.
+
+        One name means one handler per event, so a second registration for the
+        same name silently disables the first. That is almost always a
+        duplicated name in a config or an import happening twice, and it
+        presents as "my hook just stopped running" -- worth a warning.
+        """
+        existing = self._handlers[event].get(name)
+        if existing is not None and existing is not fn:
+            logger.warning(
+                "replacing %s handler for %r (was %s, now %s); one name means one handler",
+                event,
+                name,
+                getattr(existing, "__qualname__", existing),
+                getattr(fn, "__qualname__", fn),
+            )
+        self._handlers[event][name] = fn
+
     # -- registration decorators ------------------------------------------
 
     def before(self, name: str):
         """Register a request-phase handler: ``fn(ctx, tag)``."""
 
         def deco(fn: Any) -> Any:
-            self._handlers["before"][name] = fn
+            self._put("before", name, fn)
             return fn
 
         return deco
@@ -82,7 +104,7 @@ class EventRegistry:
         ``fn(payload, ctx, tag) -> payload``."""
 
         def deco(fn: Any) -> Any:
-            self._handlers["after"][name] = fn
+            self._put("after", name, fn)
             return fn
 
         return deco
@@ -91,7 +113,7 @@ class EventRegistry:
         """Register a per-chunk handler: ``fn(chunk, ctx, tag, scratch)``."""
 
         def deco(fn: Any) -> Any:
-            self._handlers["stream"][name] = fn
+            self._put("stream", name, fn)
             return fn
 
         return deco
@@ -102,7 +124,7 @@ class EventRegistry:
         error body)."""
 
         def deco(fn: Any) -> Any:
-            self._handlers["error"][name] = fn
+            self._put("error", name, fn)
             return fn
 
         return deco
@@ -121,7 +143,7 @@ class EventRegistry:
                 name = attr[len(prefix):]
                 if not name:
                     continue
-                self._handlers[event][name] = getattr(handler, attr)
+                self._put(event, name, getattr(handler, attr))
         return self
 
     # -- lookup ------------------------------------------------------------

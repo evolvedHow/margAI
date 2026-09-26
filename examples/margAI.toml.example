@@ -3,10 +3,11 @@
 
 [gateway]
 prefix = "margAI"               # namespace for model ids: margAI/<provider>/<model>
-expose = "prefixed"           # prefixed | both | raw
+expose = "prefixed"            # prefixed | both | raw
 timeout = 60.0                # default upstream timeout (seconds)
 default_provider = ""         # e.g. "openai" routes unprefixed/unknown models here
 models_cache_ttl = 300.0      # seconds /v1/models catalog is cached
+dynamic_model = "dynamic"     # reserved id "<prefix>/<dynamic_model>" routes per call
 # host and port are used by `uv run margAI`:
 host = "0.0.0.0"
 port = 8000
@@ -20,7 +21,7 @@ emit = "log"                  # none | log | callback
 "openai/gpt-4o" = { in = 2.50, out = 10.00 }
 
 [hooks]
-load = []                     # e.g. ["examples.simple_hooks"] or ["myapp.hooks:register"]
+load = []                     # e.g. ["margAI.examples.optimize_hooks"] or ["myapp.hooks:register"]
 
 [providers.my_openai]
 kind = "openai"               # openai | openai-compatible | anthropic

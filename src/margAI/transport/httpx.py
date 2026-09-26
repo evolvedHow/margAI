@@ -52,8 +52,18 @@ class HttpxTransport:
         await self._client.aclose()
 
     def _build(self, req: PreparedRequest) -> httpx.Request:
+        if (req.data or req.files) and req.json is not None:
+            raise ApiError(
+                500, "PreparedRequest cannot carry both a JSON body and multipart data", error_type="server_error"
+            )
         return self._client.build_request(
-            method=req.method, url=req.url, headers=req.headers, json=req.json, timeout=req.timeout
+            method=req.method,
+            url=req.url,
+            headers=req.headers,
+            json=req.json,
+            data=req.data,
+            files=req.files,
+            timeout=req.timeout,
         )
 
     async def request(self, req: PreparedRequest) -> UpstreamResponse:

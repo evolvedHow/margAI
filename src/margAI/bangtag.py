@@ -105,8 +105,9 @@ def install_bangtags(
     ``Tag``\\ s in ``ctx.state[state_key]`` -- the key the wrapper's event
     dispatch reads, so ``@app.before("refine")``-style handlers fire.
 
-    The hook runs at ``order`` (before the default event dispatch at ``0``),
-    so tags are ready by the time ``before`` events run.
+    The hook runs at ``order``, which defaults to before the wrapper's own
+    event dispatch, so tags are ready by the time ``before`` events (and
+    therefore every marglet) run.
     """
     if getattr(app, "_bangtags_installed", False):
         return

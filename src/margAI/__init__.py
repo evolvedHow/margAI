@@ -34,7 +34,11 @@ from .core import (
     UpstreamStream,
     maybe_await,
 )
+from .core.intent import RoutingIntent
+from .core.marglets import Marglet, MargletRegistry, MargletSpec
+from .core.router import Candidate
 from .providers import build_providers
+from .routing import Routing, Selector, coerce_route
 from .telemetry import CallRecord, Telemetry
 from .transport.fastapi import build_app
 from .wrapper import GatewayResponse, StreamHandle, Wrapper
@@ -44,6 +48,7 @@ __version__ = "0.1.0"
 __all__ = [
     "ApiError",
     "CallRecord",
+    "Candidate",
     "Config",
     "ConfigError",
     "DONE",
@@ -52,10 +57,16 @@ __all__ = [
     "GatewayResponse",
     "HookKind",
     "HookRegistry",
+    "Marglet",
+    "MargletRegistry",
+    "MargletSpec",
     "ModelRouter",
     "PreparedRequest",
     "RequestContext",
     "Route",
+    "Routing",
+    "RoutingIntent",
+    "Selector",
     "StreamHandle",
     "Tag",
     "Telemetry",
@@ -66,6 +77,7 @@ __all__ = [
     "__version__",
     "build_app",
     "build_providers",
+    "coerce_route",
     "find_directive",
     "install_bangtags",
     "load_config",
