@@ -1,0 +1,56 @@
+# vedanta.toml - Example configuration showing custom gateway prefix and local models
+#
+# NOTE: This config is merged with src/margAI/_default.toml, which defines
+# openai, gemini, and openrouter providers. Those will appear in the catalog
+# unless you have API keys configured (in which case they'll show but fail
+# authentication). To hide them completely, set models = [] for each provider.
+
+[gateway]
+prefix = "veda"               # namespace for model ids: veda/<provider>/<model>
+expose = "prefixed"             # prefixed | both | raw
+timeout = 60.0                  # default upstream timeout (seconds)
+default_provider = "local"     # routes unprefixed/unknown models here
+models_cache_ttl = 300.0        # seconds /v1/models catalog is cached
+host = "0.0.0.0"
+port = 8001
+
+[telemetry]
+enabled = true
+emit = "file"                   # none | log | callback | file
+label = "vedanta"               # file becomes vedanta_telemetry_<yymmddhhmmss>.log
+# dir = "~/logs"                # default: $XDG_STATE_HOME/margAI/logs
+# callback = "myapp.telemetry:on_record"   # when emit = "callback"
+
+[telemetry.costs]               # optional $ per 1M tokens for cost estimates
+"openai/gpt-4o" = { in = 2.50, out = 10.00 }
+
+[hooks]
+# Dotted path to a module exposing register(wrapper), inside the installed
+# package. The bare "examples.optimize_hooks" path does not exist.
+load = ["margAI.examples.optimize_hooks"]
+# examples/vedanta.py is also a hook module. It is not inside the package, so
+# load it by top-level name with `examples` on sys.path:
+#   load = ["margAI.examples.optimize_hooks", "vedanta"]
+# or just run it directly: `uv run python examples/vedanta.py`.
+
+# Hide providers from embedded defaults by setting models = []
+# NOTE: OpenRouter doesn't require auth for /v1/models discovery, so it will
+# still fetch its catalog. To completely disable it, we'd need to set an invalid
+# base_url or remove the provider entirely (not possible with config merging).
+[providers.openai]
+models = []  # Hide from catalog; requests to veda/openai/gpt-4o still work with API key
+
+[providers.gemini]
+models = []  # Hide from catalog
+
+[providers.openrouter]
+models = []  # Static models hidden, but discovery still happens
+base_url = "http://localhost:1"  # Override with invalid URL to disable discovery
+
+# Your local provider
+[providers.local]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:8080/v1"
+# No key for a local server: omit api_key_env entirely. An empty string is
+# rejected ("api_key_env must not be empty").
+models = ["llama3.2-1b", "gemma-4-E2B"]

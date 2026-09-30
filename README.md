@@ -3,36 +3,122 @@
 A wrapper is a reusable layer of interceptors around any upstream LLM (OpenAI,
 OpenRouter, vLLM, Ollama, a local server...). margAI gives you the pipeline,
 the provider abstraction, and the model routing; **you** write the handlers.
-The developer experience is FastAPI-flavored: decorate handlers straight onto
-your wrapper.
+
+## Quick Start (Simplified Gateway API)
+
+The simplest way to use margAI is with the Gateway class:
 
 ```python
-from margAI import Wrapper, install_bangtags
+from margAI import Gateway
+
+app = Gateway()  # Reads ./margAI.toml automatically
+
+@app.tag("summarize")
+def summarize(ctx, tag):
+    """Add instruction to summarize."""
+    ctx.add_system("Provide a brief summary.")
+
+@app.tag("rag")
+def add_context(ctx, tag):
+    """Look up context from vector DB."""
+    query = tag.value or ctx.user_message()
+    docs = vector_db.search(query, top_k=5)
+    ctx.add_system(f"Relevant context:\n{docs}")
+
+@app.tag("fast")
+def route_fast(ctx, tag):
+    """Route to fast local model."""
+    return ctx.route_to("local/llama3.2-1b")
+
+app.serve()
+```
+
+Users can then write prompts like:
+```
+!app: rag=quantum computing, summarize
+
+What is quantum entanglement?
+```
+
+**Key principles:**
+- **One decorator**: `@app.tag()` - define your tags, no built-ins
+- **Complete flexibility**: Routing, caching, validation - all just tags
+- **Framework owns infrastructure**: Pipeline, telemetry, exit points
+- **You own the logic**: When to hook in, what to do
+
+See `examples/minimal_gateway.py`, `examples/rag_gateway.py` for working examples.
+
+## Advanced API (Full Wrapper)
+
+For more control, use the full Wrapper API:
+
+```python
+from margAI import Wrapper
 from margAI.config import load_config
 
 app = Wrapper.from_config(load_config())
 
-install_bangtags(app)                 # layer-in "!margAI: <tag>" parsing
+# Install bangtag parsing (optional)
+from margAI import install_bangtags
+install_bangtags(app)
 
-@app.before("refine")                 # request-phase event (tag-keyed)
+@app.before("refine")  # Tag-keyed hook
 def refine(ctx, tag):
-    ctx.state["refined"] = compact(ctx.last_user_message())
+    ctx.add_system_prompt("Refine your response.")
 
-@app.after("structure")               # response-phase event
-def structure(payload, ctx, tag):
-    payload["choices"][0]["message"]["content"] = bulletize(
-        payload["choices"][0]["message"]["content"])
-    return payload
-
-@app.after                           # per-call hooks (every call)
-def annotate(payload, ctx):
+@app.after  # Runs on every response
+def log_response(payload, ctx):
+    print(f"Tokens: {payload.get('usage', {}).get('total_tokens')}")
     return payload
 ```
 
-Handlers may be sync or async. Services a call carries (via `ctx.tags`), the
-tag-keyed events fire automatically at the matching phase; `before`/`after`/
-`stream`/`error` cover both sides of a call plus per-chunk streaming and
-failure shaping.
+Handlers may be sync or async. `before`/`after`/`stream`/`error` cover both
+sides of a call plus per-chunk streaming and failure shaping.
+
+## What's Different in This Version
+
+### Simplified API
+- **Gateway class**: One-line setup with `Gateway()`
+- **No built-in tags**: Define only what you need
+- **@app.tag() decorator**: Single decorator pattern for all tags
+- **Context helpers**: `ctx.add_system()`, `ctx.route_to()`, `ctx.respond()`
+
+### Migration from Previous Versions
+```python
+# Old way (still works)
+from margAI import Wrapper, install_bangtags
+app = Wrapper.from_config(load_config())
+install_bangtags(app)  # Built-in tags auto-installed
+
+# New way (recommended)
+from margAI import Gateway
+app = Gateway()  # No built-in tags, define your own
+
+# Want built-in tags? Opt-in explicitly:
+app = Gateway(load_builtin_tags=True)
+# Or:
+from margAI.builtin_tags import install
+install(app.wrapper)
+```
+
+## Concepts
+
+margAI has three layers, each building on the previous:
+
+1. **Tags** - Decorated functions that run when mentioned in prompts
+   - `@app.tag("summarize")` → runs when user writes `!app: summarize`
+   - Can modify prompts, override routing, short-circuit, or return errors
+
+2. **Hooks** - Functions that run on every request/response
+   - `@app.on_request` → runs before every call
+   - `@app.on_response` → runs after every call
+   - Useful for logging, metrics, caching
+
+3. **Routing** - Just another tag that returns `ctx.route_to(model)`
+   - No special API, no selector chains
+   - Use built-in helpers or write your own logic
+
+Most apps only need layer 1 (tags).
 
 ## Marglets
 
@@ -94,6 +180,12 @@ constraints come from the bangtag and are applied first — `route=`,
 `provider=`, `model=`, `not=`, `only=` — and are visible to selectors as the
 immutable `intent` (`ctx.intent`, refined in a marglet with `ctx.steer(...)`).
 
+A `route=` that pins both a provider and a model short-circuits the chain:
+`!margAI: route=local/qwen3` asked for a specific target. The pin is still
+subject to the call's own constraints — `!margAI: route=openai/x, not=openai`
+is a contradiction and fails with a 404 that says so, rather than quietly
+serving openai. Same rule as the fallback below.
+
 If no selector claims the call it falls back to `gateway.default_provider` and
 records `reason="default_provider"`; if that too is excluded by the call's own
 constraints, the call fails with a 404 that says so rather than quietly
@@ -123,6 +215,64 @@ request is never unattributable.
 | Adapter | `margAI.transport.fastapi` | OpenAI-shaped HTTP API (LibreChat, Modal) |
 | Config | `margAI.config` | TOML via `tomllib` + env overrides |
 | Telemetry | `margAI.telemetry` | usage / latency / cost records |
+
+## Complete Example: RAG + Caching + Smart Routing
+
+```python
+from margAI import Gateway
+import chromadb
+
+app = Gateway()
+db = chromadb.Client()
+cache = {}
+
+@app.tag("rag")
+def add_rag_context(ctx, tag):
+    """Add vector DB results to prompt."""
+    query = tag.value or ctx.user_message()
+    results = db.search(query, n_results=5)
+    ctx.add_system(f"Context:\n{results}")
+
+@app.tag("cache")
+def check_cache(ctx, tag):
+    """Return cached response if available."""
+    key = ctx.cache_key()
+    if key in cache:
+        return ctx.respond(cache[key])  # Skip LLM
+
+@app.on_response
+def store_cache(payload, ctx):
+    """Cache responses."""
+    key = ctx.cache_key()
+    cache[key] = payload
+    return payload
+
+@app.tag("smart")
+def smart_routing(ctx, tag):
+    """Route based on complexity."""
+    if ctx.analyze_complexity() == "high":
+        return ctx.route_to("openai/gpt-4o")
+    else:
+        return ctx.route_to("local/llama3.2-1b")
+
+app.serve()
+```
+
+**Usage:**
+```
+!app: rag=quantum computing, cache, smart
+
+Explain quantum entanglement
+```
+
+This will:
+1. Check cache (skip if hit)
+2. Search vector DB for "quantum computing"
+3. Analyze complexity and route appropriately
+4. Cache the response
+
+**Framework owns**: Pipeline, telemetry, provider abstraction  
+**You own**: When to cache, where to search, how to route
 
 ## Quick start
 
@@ -189,9 +339,16 @@ also be written as an `EventHandler` subclass with methods named
 
 The bangtag layer (`margAI.bangtag`) makes tags user-facing: `install_bangtags`
 parses `!margAI: refine, route=...` out of the last user message, strips it
-from the prompt, and stores `Tag` objects in `ctx.state["bangtags"]` — which
-is what the tag-keyed events dispatch on. The namespace is required, so
-user-typed text can't accidentally fire a handler.
+from the prompt, and records `Tag` objects with `ctx.set_tags(...)` — which is
+what the tag-keyed events dispatch on. The namespace is required, so
+user-typed text can't accidentally fire a handler. `install_bangtags` is
+optional: if you don't want `!margAI:` syntax, skip it and call
+`ctx.set_tags(my_tags_for(ctx))` from your own request hook instead — at
+`order=-100`, since the tag dispatch runs at `-50`.
+
+Because a directive is a routing instruction parsed out of user text, an
+allowlist is the trust boundary when the user is not you — see
+[Security](#security).
 
 Notes:
 
@@ -218,13 +375,182 @@ lists); upstream discovery is only used for the catalog and is cached (TTL from
 `models_cache_ttl`). Call `wrapper.invalidate_models_cache()` to drop the
 catalog early.
 
+## Virtual models
+
+`margAI/fast` is not a model anyone hosts. It is a *claim* about one, resolved
+per call against the models actually configured — so the client contract stays
+stable while the catalogue underneath it changes.
+
+```toml
+[models.fast]
+strategy = "cheapest"          # first | cheapest | round_robin | least_used | highest_balance
+providers = ["openai", "gemini"]
+exclude_providers = ["openrouter"]
+prefer = ["openai/gpt-4o-mini"]   # tried first; a miss is skipped, not fatal
+max_cost_per_1m = 1.0          # blended $/1M, needs [telemetry.costs]
+tags = ["chat"]                # eligible only when the call carries these
+```
+
+`cheapest` needs prices in `[telemetry.costs]`; without them every model is
+equally priceless and the cheapest strategy degrades to `first`. `round_robin`
+keeps one cursor per policy behind a lock, so it spreads load across threads
+rather than handing every request the same first target.
+
+`least_used` picks the candidate with the fewest calls this billing window.
+`highest_balance` picks the one with the most budget left, so a cap you
+declared is spent down rather than exhausted. Defining budgets is optional, and
+a candidate with **no budget is immaterial**: it is ranked as a neutral zero,
+neither rewarded for an unspendable cap nor punished for an unmeasurable one.
+
+Both read an in-process ledger, fed with the same estimated cost telemetry
+reports. That ledger is per-process and never persisted (a telemetry log on
+disk records the same figures, but nothing reads them back), so under multiple
+uvicorn workers each process counts only its own traffic — the same caveat as
+`round_robin`'s cursor. `highest_balance` is a way of rationing a budget *you
+declared*, not a way of reading a provider's account: margAI never calls a
+billing API.
+
+Metering — and so `highest_balance` — needs **both** prices in
+`[telemetry.costs]` and a cycle (`reset_day`, or an explicit period; see the
+example config). With either missing it degrades to `least_used` rather than
+ranking on a number it cannot stand behind. Budgets key like costs:
+`"provider/model"`, a bare `"model"` for any provider, or `"provider/*"` for a
+whole provider.
+
+A virtual name that collides with a real provider or model is rejected at
+construction, not resolved by whichever code path ran first.
+
+A caller can override a policy per call through `[models.*]` in the per-call
+config below. The override is a *narrowing* the caller's own `not=`/`only=`
+constraints still apply on top of.
+
+## Per-call config
+
+`wrapper.complete(body, config=...)` and `open_stream` take a config overlay
+as TOML text or a dict. Handlers read it through `ctx.config`:
+
+```python
+@app.before
+def guard(ctx):
+    if ctx.config.enabled("audit") and ctx.config.pack("audit", "threshold"):
+        ...
+```
+
+The surface is deliberately narrow. Only `[packs.*]` and `[models.*]` are
+accepted — never hooks, providers, callbacks, imports or endpoints, because an
+overlay is untrusted input arriving over HTTP. Tables deep-merge, lists
+replace, and anything else is a `400` *before* any handler runs, so a rejected
+config cannot have had a side effect.
+
+## Security
+
+**margAI does not authenticate.** The FastAPI surface accepts any request that
+reaches it, and the per-call overlay guards above limit *what a caller may
+configure* — they protect nothing from a caller who was never allowed in the
+first place. Treat the gateway as an internal component:
+
+- Bind to loopback. `MARGAI_HOST=127.0.0.1` (or `host = "127.0.0.1"` in
+  `[gateway]`) is the default you want on a single host. The shipped default
+  is `0.0.0.0`, which is a convenience for containers, not a recommendation.
+- To expose it, put an authenticating reverse proxy in front — Caddy, nginx,
+  an ingress with an auth annotation — and let the proxy handle TLS,
+  authentication and rate limiting. margAI will not do it for you.
+- In a container, publish the port to `127.0.0.1` on the host
+  (`127.0.0.1:8000:8000`), not to `0.0.0.0`.
+
+Anyone who can send a request can spend your provider budget by naming an
+expensive model in the `model` field, so authentication is the control that
+matters. Everything below is defense in depth behind it.
+
+**Bangtags are a control channel inside the user channel.** `!margAI:`
+directives are parsed out of the last user message, so `route=openai/gpt-4o` in
+a prompt is a routing instruction written by whoever wrote the prompt. If that
+person is your own application, `install_bangtags(app)` is correct as-is. If it
+is a user you do not control, pass an allowlist:
+
+```python
+install_bangtags(app, allow=["think", "terse", "refine"])
+```
+
+Anything else on a directive is dropped with a warning, and the directive text
+is stripped from the prompt either way — denying a tag must not leave
+`!margAI: route=...` sitting in the model's context for an
+instruction-following model to act on. The allowlist can be set at any point,
+including after the built-in pack has already installed the `margAI` namespace,
+and tightening is one-way. An allowlist does not replace authentication: a
+caller who can send a request can still set the `model` field directly.
+
+**Secrets belong in the environment.** `ProviderConfig` takes `api_key_env`
+(a variable name) rather than a literal `api_key`, and `.env` is gitignored —
+keep it that way. The embedded default config ships provider shells with no
+keys, no hook auto-loading and no localhost upstreams.
+
+## Packs
+
+Any installable package can extend the gateway by advertising a `margAI.packs`
+entry point:
+
+```toml
+[project.entry-points."margAI.packs"]
+my_pack = "my_pack:install"
+```
+
+Each discovered pack runs and registers tags in its own namespace. A pack that
+fails to import is recorded in `wrapper.pack_failures` and skipped rather than
+taking the gateway down with it — except one named in
+`[gateway] packs_only`, where failing is the point. Set
+`[gateway] pack_discovery = false` to skip discovery entirely.
+
+## Diagnostics
+
+```console
+$ margAI doctor
+  ok    config: margAI.toml over embedded
+  WARN  provider openai: no API key (expected $OPENAI_API_KEY)
+        Requests will fail upstream until it is set.
+  note  routing: no selectors registered, so 'margAI/dynamic' can only fall back
+        Add wrapper.routing.add_selector(...) or set gateway.default_provider.
+```
+
+`margAI doctor` checks config layering, pack failures, undocumented tags,
+provider models and keys, virtual-model ceilings, and whether anything can
+actually route. It exits non-zero on failures, `--json` for CI, and it never
+sends a request — it diagnoses wiring, and a diagnostic with its own side
+effects is one nobody trusts.
+
+`GET /v1/margAI/tags` serves the same live picture as `wrapper.describe()`:
+registered tags by namespace, configured virtual models, providers, packs, and
+config provenance.
+
+Per-call telemetry goes wherever `[telemetry] emit` points: the process log
+(`log`), your callback (`callback`), or a generated JSONL file (`file`). The
+file sink writes one JSON object per line to
+`<label>_telemetry_<yymmddhhmmss>.log`, where the label defaults to the gateway
+prefix and the directory to `[telemetry] dir` or `$XDG_STATE_HOME/margAI/logs`.
+The timestamp in the name is the run's start, so restarts append to new files
+rather than clobbering the log you were reading.
+
 ## Configurability
 
 See `examples/margAI.toml.example` for the full surface: prefix, expose mode,
-timeouts, per-provider keys/models, telemetry on/off (log, callback, or none),
-cost tables, and hook loading. Gateway settings can be overridden with
+timeouts, per-provider keys/models, telemetry on/off (log, callback, file, or
+none), cost tables, billing cycle and budgets for `highest_balance`, and hook
+loading.
+Gateway settings can be overridden with
 `MARGAI_HOST`, `MARGAI_PORT`, `MARGAI_PREFIX`, `MARGAI_EXPOSE`, `MARGAI_TIMEOUT`,
 `MARGAI_DEFAULT_PROVIDER`, `MARGAI_DYNAMIC_MODEL`.
+
+Configuration is layered, lowest to highest: dataclass defaults, the embedded
+`src/margAI/_default.toml`, your `margAI.toml` (or `-c`/`$MARGAI_CONFIG`),
+`MARGAI_*` environment variables, and a per-call overlay. The embedded layer
+carries provider shells only — no hook auto-loading, no localhost upstreams, no
+literal API keys — so a fresh install is configured but not yet pointed
+anywhere. `config.layers` records which layers actually applied.
+
+Naming a config file that does not exist (`-c` or `$MARGAI_CONFIG`) is an
+error. A missing `./margAI.toml` is not: that is the normal no-config case,
+and silently starting a gateway with none of the operator's providers is worse
+than saying so.
 
 ## Portability
 

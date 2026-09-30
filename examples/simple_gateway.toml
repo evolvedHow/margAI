@@ -1,0 +1,29 @@
+# Simple Gateway Configuration
+# This uses a clean prefix without the default providers
+
+[gateway]
+prefix = "app"  # Bangtags will be: !app: <tag>
+host = "127.0.0.1"
+port = 8003
+default_provider = "local"
+
+[telemetry]
+enabled = true
+emit = "log"
+
+# Hide default providers
+[providers.openai]
+models = []
+
+[providers.gemini]
+models = []
+
+[providers.openrouter]
+base_url = "http://localhost:1"  # Disable discovery
+models = []
+
+# Just our local provider
+[providers.local]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:8080/v1"
+models = ["llama3.2-1b", "gemma-4-E2B"]

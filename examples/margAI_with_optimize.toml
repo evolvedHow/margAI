@@ -19,7 +19,7 @@ emit = "log"                    # none | log | callback
 "openai/gpt-4o" = { in = 2.50, out = 10.00 }
 
 [hooks]
-load = ["examples.optimize_hooks"]  # loads the optimize hooks
+load = ["margAI.examples.optimize_hooks"]  # loads the optimize hooks
 
 [providers.openai]
 kind = "openai"
