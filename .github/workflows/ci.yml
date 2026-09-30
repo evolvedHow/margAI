@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A tag is the release trigger, so the publish job below sees it too. Without
+  # this the build-and-test matrix would not run for a release, and a tag would
+  # be the one commit that shipped untested.
+  tags: ["v*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the floor declared in `requires-python`; 3.13 is the version
+        # most users will actually be on. A release that only ever tested the
+        # floor would find out about the rest from bug reports.
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras --dev
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      # No `ruff format --check` here on purpose. The project lints with ruff
+      # but has never adopted its formatter, so gating on it would fail every
+      # file in the tree. Adopting it is a real decision -- it touches most of
+      # the codebase -- and belongs in its own commit, not in the release.
+
+      - name: Types
+        run: uv run mypy src/margAI
+
+      - name: Tests
+        run: uv run pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build
+        run: uv build
+
+      - name: Validate the distributions
+        run: uvx twine check --strict dist/*
+
+      # A wheel that builds is not a wheel that works. Installing it into a
+      # clean environment and running the suite against the *installed* package
+      # catches the packaging mistakes a source-tree test run cannot: a data
+      # file left out of `artifacts`, a package the finder never sees, an import
+      # that only resolves from the repo root.
+      - name: Install the built wheel into a clean environment
+        run: |
+          uv venv /tmp/verify
+          VIRTUAL_ENV=/tmp/verify uv pip install dist/*.whl pytest pytest-asyncio
+          /tmp/verify/bin/python -c "import margAI, pathlib; \
+            assert 'site-packages' in str(pathlib.Path(margAI.__file__)), margAI.__file__"
+
+      - name: Test the installed wheel
+        run: /tmp/verify/bin/python -m pytest tests -q -p no:cacheprovider
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+# No publish job here on purpose. PyPI's trusted-publisher model is a
+# trust relationship with a *workflow file*, and PyPI's own guidance is to make
+# that file as small and as privileged as possible -- they recommend a dedicated
+# `release.yml` rather than trusting the whole of CI. Trusting this file would
+# mean anyone who could edit a test or a lint step could also edit the publish
+# path. The release lives in `release.yml`.

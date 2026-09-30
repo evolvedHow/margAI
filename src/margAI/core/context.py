@@ -303,17 +303,16 @@ class RequestContext:
             @app.tag("smart")
             def smart_route(ctx, tag):
                 if ctx.analyze_complexity() == "high":
-                    return ctx.route_to("openai/gpt-4o")
+                    return ctx.route_to("margAI/openai/gpt-4o")
                 else:
-                    return ctx.route_to("local/llama3.2-1b")
+                    return ctx.route_to("margAI/local/llama3.2-1b")
         """
         words = self.user_message_length()
         if words < 20:
             return "low"
-        elif words < 100:
+        if words < 100:
             return "medium"
-        else:
-            return "high"
+        return "high"
     
     # -- Pipeline control ---------------------------------------------------
     
@@ -323,7 +322,9 @@ class RequestContext:
         Return this from a tag function to force routing to a model.
         
         Args:
-            model: Model ID (can be prefixed or not)
+            model: A model id in the form ``GET /v1/models`` lists them,
+                e.g. ``margAI/local/llama3.2-1b``. An id that does not
+                resolve is a 404 naming the ids that do.
         
         Returns:
             RouteOverride object to return from tag function
@@ -332,7 +333,7 @@ class RequestContext:
         
             @app.tag("fast")
             def fast_route(ctx):
-                return ctx.route_to("local/llama3.2-1b")
+                return ctx.route_to("margAI/local/llama3.2-1b")
         """
         return RouteOverride(model)
     

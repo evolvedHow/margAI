@@ -191,7 +191,11 @@ def test_wrapper_event_decorators_fire_automatically():
     res = asyncio.run(go())
     assert res.status == 200
     assert res.body["choices"][0]["message"]["content"] == "hi!"
-    assert wrapper.events.all() == {"shout"}
+    # The gateway is zero-config, so the framework's own pack is registered too.
+    # `shout` joining it is the point: application code and built-in tags live
+    # in one registry, under the same namespace, with no special casing.
+    assert "shout" in wrapper.events.all()
+    assert {"route", "provider", "model", "not", "only"} <= wrapper.events.all()
 
 
 def test_wrapper_events_describe_docs():

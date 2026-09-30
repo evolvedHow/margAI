@@ -27,26 +27,58 @@ def add_context(ctx, tag):
 
 @app.tag("fast")
 def route_fast(ctx, tag):
-    """Route to fast local model."""
-    return ctx.route_to("local/llama3.2-1b")
+    """Route to a fast local model."""
+    return ctx.route_to("margAI/local/llama3.2-1b")
 
 app.serve()
 ```
 
 Users can then write prompts like:
 ```
-!app: rag=quantum computing, summarize
+!app: rag=quantum-computing, summarize
 
 What is quantum entanglement?
 ```
 
-**Key principles:**
-- **One decorator**: `@app.tag()` - define your tags, no built-ins
-- **Complete flexibility**: Routing, caching, validation - all just tags
-- **Framework owns infrastructure**: Pipeline, telemetry, exit points
-- **You own the logic**: When to hook in, what to do
+A directive is one line: `!<namespace>: tag, tag=value, ...`. Tags are split on
+commas and then on whitespace, so **a value cannot contain a space** — use `-`
+or `_`, or pass structured data some other way. Quoting is not a thing:
+`rag="quantum computing"` parses as the value `"quantum` plus a junk `computing"`
+tag.
 
-See `examples/minimal_gateway.py`, `examples/rag_gateway.py` for working examples.
+The model id is whatever `GET /v1/models` returned — under the default
+`prefixed` expose that means `<namespace>/<provider>/<model>`. A bare
+`<namespace>/dynamic` hands each call to the routing chain instead.
+
+**Key principles:**
+- **One decorator**: `@app.tag()` for everything a caller can ask for
+- **Built-ins included**: `route=`, `provider=`, `model=`, `not=`, `only=`,
+  `cost=`, `think=` work with no setup, and are disabled with
+  `[packs."margAI.builtin_tags"] enabled = false`
+- **Complete flexibility**: routing, caching, and validation are all just tags
+- **Framework owns infrastructure**: pipeline, telemetry, exit points
+- **You own the logic**: when to hook in, and what to do
+
+See `examples/minimal_gateway.py` and `examples/rag_gateway.py` for working
+examples.
+
+## Two APIs, One Wrapper
+
+`Gateway` is a decorator-first front end over the same `Wrapper`. It reads
+`./margAI.toml`, parses bangtags for your namespace, and exposes `@app.tag()`.
+Everything else is available on `app.wrapper` when you outgrow it.
+
+```python
+from margAI import Gateway
+
+app = Gateway()  # ./margAI.toml, or $MARGAI_CONFIG
+
+@app.tag("summarize")
+def summarize(ctx, tag):
+    ctx.add_system("Provide a brief summary.")
+
+app.serve()
+```
 
 ## Advanced API (Full Wrapper)
 
@@ -58,9 +90,11 @@ from margAI.config import load_config
 
 app = Wrapper.from_config(load_config())
 
-# Install bangtag parsing (optional)
+# Bangtag parsing is already installed for the reserved `margAI` namespace,
+# along with the built-in `route=` / `provider=` / `model=` / `think=` tags.
+# Add a second namespace only if you renamed yourself:
 from margAI import install_bangtags
-install_bangtags(app)
+install_bangtags(app, namespace="myapp")
 
 @app.before("refine")  # Tag-keyed hook
 def refine(ctx, tag):
@@ -75,48 +109,32 @@ def log_response(payload, ctx):
 Handlers may be sync or async. `before`/`after`/`stream`/`error` cover both
 sides of a call plus per-chunk streaming and failure shaping.
 
-## What's Different in This Version
+Built-in tags are installed by `Wrapper` itself, so `Gateway` and `Wrapper`
+behave identically here. To turn them off:
 
-### Simplified API
-- **Gateway class**: One-line setup with `Gateway()`
-- **No built-in tags**: Define only what you need
-- **@app.tag() decorator**: Single decorator pattern for all tags
-- **Context helpers**: `ctx.add_system()`, `ctx.route_to()`, `ctx.respond()`
-
-### Migration from Previous Versions
-```python
-# Old way (still works)
-from margAI import Wrapper, install_bangtags
-app = Wrapper.from_config(load_config())
-install_bangtags(app)  # Built-in tags auto-installed
-
-# New way (recommended)
-from margAI import Gateway
-app = Gateway()  # No built-in tags, define your own
-
-# Want built-in tags? Opt-in explicitly:
-app = Gateway(load_builtin_tags=True)
-# Or:
-from margAI.builtin_tags import install
-install(app.wrapper)
+```toml
+[packs."margAI.builtin_tags"]
+enabled = false
 ```
 
 ## Concepts
 
 margAI has three layers, each building on the previous:
 
-1. **Tags** - Decorated functions that run when mentioned in prompts
-   - `@app.tag("summarize")` → runs when user writes `!app: summarize`
+1. **Tags** - Handlers that run when a bangtag mentions them
+   - `@app.tag("summarize")` on `Gateway`, or `app.on("summarize")` on
+     `Wrapper` → runs when the user writes `!app: summarize`
    - Can modify prompts, override routing, short-circuit, or return errors
 
 2. **Hooks** - Functions that run on every request/response
-   - `@app.on_request` → runs before every call
-   - `@app.on_response` → runs after every call
+   - `@app.before` / `@app.on_request` → runs before every call
+   - `@app.after` / `@app.on_response` → runs after every call
    - Useful for logging, metrics, caching
 
 3. **Routing** - Just another tag that returns `ctx.route_to(model)`
-   - No special API, no selector chains
-   - Use built-in helpers or write your own logic
+   - `!<namespace>/dynamic` defers to a selector chain you build with
+     `wrapper.routing.add_selector(...)`
+   - Or a `[models.*]` virtual model, which picks a target per call by policy
 
 Most apps only need layer 1 (tags).
 
@@ -209,7 +227,8 @@ request is never unattributable.
 | Wrapper | `margAI.wrapper` | the pipeline + FastAPI-style decorators |
 | Marglets | `margAI.core.marglets` | named, bangtag-activated enhancements |
 | Routing | `margAI.routing` | the dynamic selector chain |
-| Bangtags | `margAI.bangtag` | optional `!margAI:` directive layer (`install_bangtags`) |
+| Bangtags | `margAI.bangtag` | the `!margAI:` directive layer, installed by default |
+| Built-ins | `margAI.builtin_tags` | `route=`, `provider=`, `model=`, `not=`, `only=`, `cost=`, `think=` |
 | Providers | `margAI.providers` | per-upstream normalizers (OpenAI-compatible, Anthropic) |
 | Transport | `margAI.transport` | protocol + httpx impl | 
 | Adapter | `margAI.transport.fastapi` | OpenAI-shaped HTTP API (LibreChat, Modal) |
@@ -240,7 +259,7 @@ def check_cache(ctx, tag):
     if key in cache:
         return ctx.respond(cache[key])  # Skip LLM
 
-@app.on_response
+@app.after
 def store_cache(payload, ctx):
     """Cache responses."""
     key = ctx.cache_key()
@@ -251,16 +270,16 @@ def store_cache(payload, ctx):
 def smart_routing(ctx, tag):
     """Route based on complexity."""
     if ctx.analyze_complexity() == "high":
-        return ctx.route_to("openai/gpt-4o")
+        return ctx.route_to("margAI/openai/gpt-4o")
     else:
-        return ctx.route_to("local/llama3.2-1b")
+        return ctx.route_to("margAI/local/llama3.2-1b")
 
 app.serve()
 ```
 
 **Usage:**
 ```
-!app: rag=quantum computing, cache, smart
+!app: rag=quantum-computing, cache, smart
 
 Explain quantum entanglement
 ```
@@ -567,5 +586,39 @@ Linting and type checks (both configured in `pyproject.toml`):
 
 ```sh
 uv run ruff check src tests
-uv run mypy src tests
+uv run mypy src/margAI
 ```
+
+`mypy` is configured over `src/margAI` only. The test suite is deliberately not
+annotated end to end, so running it over `tests` reports a wall of
+`no-untyped-def` that says nothing about the library.
+
+## License
+
+[Apache-2.0](LICENSE) © 2026 Vish Ganapathy. Free to use commercially and
+closed-source, including if you embed it in a product you never open up.
+
+What that obliges you to do, in full:
+
+- **Ship the license.** Anyone you distribute the Work to gets a copy of
+  Apache-2.0.
+- **Mark your changes.** Files you modified must say so.
+- **Keep the attribution.** The `NOTICE` file's contents must travel with any
+  derivative work, in a `NOTICE` file, in your source or docs, or in a display
+  the user actually sees. This is section 4(d), and it is the part that makes
+  "credit margAI" a real requirement rather than a suggestion.
+
+There is no copyleft and no network clause. Embedding margAI in a commercial
+product does not oblige you to release any of your own source, and your own
+licensing choices are unaffected.
+
+And the ask, which the license does not enforce: **if margAI is load-bearing in
+something you built, say so.** A "built with margAI" line in your README, an
+About page, or a blog post costs you nothing and is the only credit I can
+actually ask for. It is a request, not a term — §4(d) above is the part with
+teeth.
+
+Contributions are accepted under the same terms; see
+[CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md). Security reports go to
+[SECURITY.md](SECURITY.md), not the issue tracker.

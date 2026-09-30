@@ -131,16 +131,108 @@ def test_list_models_uses_transport():
 
 
 def test_list_models_raises_on_error():
+    import asyncio
+
     p = provider()
     transport = FakeTransport(responses=[UpstreamResponse(500, {"error": {"message": "boom"}})])
 
-    with pytest.raises(ApiError):
-        import asyncio
+    async def call() -> None:
+        await p.list_models(transport)
 
-        asyncio.run(p.list_models(transport))
+    with pytest.raises(ApiError):
+        asyncio.run(call())
 
 
 def test_extract_usage():
     p = provider()
     assert p.extract_usage({"usage": {"total_tokens": 3}}) == {"total_tokens": 3}
     assert p.extract_usage({"choices": []}) == {}
+
+# -- kinds a provider does not speak --------------------------------------
+
+
+UNSUPPORTED_KINDS = [
+    ("completions", "prepare_completions"),
+    ("embeddings", "prepare_embeddings"),
+    ("images_generations", "prepare_images_generations"),
+    ("audio_transcriptions", "prepare_audio_transcriptions"),
+]
+
+
+def anthropic():
+    cfg = provider_config(name="anthropic", kind="anthropic", base_url="https://api.anthropic.com/v1")
+    return build_providers(make_config(providers=(cfg,)))["anthropic"]
+
+
+@pytest.mark.parametrize(("kind", "method"), UNSUPPORTED_KINDS)
+def test_provider_base_declares_a_404_fallback_for_every_kind(kind, method):
+    """A kind in `Wrapper._KIND_PREPARE` that a provider has not implemented
+    must degrade to 'that provider cannot do that', not to an AttributeError
+    that surfaces as a redacted 500."""
+    for p in (provider(), anthropic()):
+        assert callable(getattr(p, method, None)), f"{p.name} has no {method}"
+
+
+@pytest.mark.parametrize(("kind", "method"), UNSUPPORTED_KINDS)
+def test_the_fallback_raises_a_404_naming_the_provider_and_endpoint(kind, method):
+    p = anthropic()
+    with pytest.raises(ApiError) as exc:
+        getattr(p, method)(RequestContext(body={}))
+    assert exc.value.status == 404
+    assert "anthropic" in exc.value.message
+    assert "/" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("kind", "parse_method"),
+    [
+        ("completions", "parse_completion_response"),
+        ("embeddings", "parse_embeddings_response"),
+        ("images_generations", "parse_images_generations_response"),
+        ("audio_transcriptions", "parse_audio_transcriptions_response"),
+    ],
+)
+def test_the_parse_half_of_each_kind_also_falls_back_to_404(kind, parse_method):
+    """Both halves of a kind's pair need the fallback, or the error lands one
+    step later than the routing decision."""
+    with pytest.raises(ApiError) as exc:
+        getattr(anthropic(), parse_method)(UpstreamResponse(200, {}), RequestContext(body={}))
+    assert exc.value.status == 404
+
+
+# -- streamed token usage ---------------------------------------------------
+
+
+def stream_body(**extra):
+    return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **extra}
+
+
+def test_a_streaming_chat_asks_the_upstream_for_usage():
+    """Without include_usage the final SSE chunk carries no counts, so a
+    streamed call would be invisible to telemetry and to the ledger."""
+    req = provider(api_key="sk").prepare_chat(RequestContext(body=stream_body(stream=True)))
+    assert req.json["stream_options"] == {"include_usage": True}
+
+
+def test_a_streaming_completion_asks_for_usage_too():
+    req = provider(api_key="sk").prepare_completions(
+        RequestContext(body={"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "stream": True})
+    )
+    assert req.json["stream_options"] == {"include_usage": True}
+
+
+def test_a_non_streaming_call_is_left_alone():
+    req = provider(api_key="sk").prepare_chat(RequestContext(body=stream_body()))
+    assert "stream_options" not in req.json
+
+
+def test_an_explicit_include_usage_is_never_overwritten():
+    body = stream_body(stream=True, stream_options={"include_usage": False})
+    req = provider(api_key="sk").prepare_chat(RequestContext(body=body))
+    assert req.json["stream_options"] == {"include_usage": False}
+
+
+def test_existing_stream_options_are_preserved():
+    body = stream_body(stream=True, stream_options={"foo": "bar"})
+    req = provider(api_key="sk").prepare_chat(RequestContext(body=body))
+    assert req.json["stream_options"] == {"foo": "bar", "include_usage": True}

@@ -9,6 +9,7 @@ import httpx
 
 from margAI import Wrapper
 from margAI.config import (
+    BillingConfig,
     Config,
     GatewayConfig,
     HookConfig,
@@ -51,12 +52,18 @@ def make_config(
     gateway: GatewayConfig | None = None,
     hooks: HookConfig | None = None,
     telemetry: TelemetryConfig | None = None,
+    models: dict | None = None,
+    packs: dict | None = None,
+    billing: BillingConfig | None = None,
 ) -> Config:
     return Config(
         gateway=gateway or GatewayConfig(),
         providers=providers,
         telemetry=telemetry or TelemetryConfig(enabled=False),
+        billing=billing or BillingConfig(),
         hooks=hooks or HookConfig(),
+        models=models or {},
+        packs=packs or {},
     )
 
 
@@ -66,10 +73,27 @@ def make_wrapper(
     providers: tuple[ProviderConfig, ...] = (provider_config(),),
     gateway: GatewayConfig | None = None,
     telemetry: Telemetry | None = None,
+    models: dict | None = None,
+    costs: tuple = (),
+    config: Config | None = None,
+    billing: BillingConfig | None = None,
 ) -> Wrapper:
     """Build a wrapper around a given transport (fake or httpx-mock)."""
-    config = make_config(providers=providers, gateway=gateway)
-    gateway = gateway or GatewayConfig()
+    if config is None:
+        base = telemetry.config if telemetry is not None else TelemetryConfig(enabled=False)
+        config = make_config(
+            providers=providers,
+            gateway=gateway,
+            telemetry=TelemetryConfig(
+                enabled=base.enabled,
+                emit=base.emit,
+                callback=base.callback,
+                costs=costs or base.costs,
+            ),
+            models=models,
+            billing=billing,
+        )
+    gateway = config.gateway
     return Wrapper(
         providers=build_providers(config),
         transport=transport,

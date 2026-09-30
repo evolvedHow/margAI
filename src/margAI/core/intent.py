@@ -1,26 +1,34 @@
 """Routing intent: what a call wants from the router, gathered before resolution.
 
 Pure stdlib. The intent is seeded from the call's bangtags and then refined by
-marglet ``before`` hooks, so by the time the dynamic router runs, everything
-that wanted a say has said it::
+``before`` handlers, so by the time the dynamic router runs, everything that
+wanted a say has said it::
 
     # via a bangtag
     "draw it  !margAI: dynamic, cheap"
     # -> intent.tags == ("dynamic", "cheap")
 
-    # via a marglet hook (immutable, so refine and reassign)
+    # via a handler (immutable, so refine and reassign)
     ctx.steer(provider="local", max_cost_per_1m=0.5)
 
 Selectors (:mod:`margAI.routing`) read the intent and return a route. They
 never mutate it -- an intent that changes under a selector is how "why did it
 pick that?" becomes unanswerable.
+
+**This module knows no tag names.** :meth:`RoutingIntent.from_tags` records
+every tag into an open vocabulary and stops there. What ``route=`` or
+``not=`` *mean* is declared by handlers in :mod:`margAI.builtin_tags`, like any
+other pack, which is why adding a directive needs no change here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any
+
+from .tags import qualify
 
 __all__ = ["INTENT_KEY", "RoutingIntent"]
 
@@ -40,58 +48,48 @@ class RoutingIntent:
     model: str | None = None
     provider: str | None = None
     tags: tuple[str, ...] = ()
+    qualified: tuple[str, ...] = ()
+    selectors: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     exclude: frozenset[str] = frozenset()
     require: frozenset[str] = frozenset()
     max_cost_per_1m: float | None = None
     notes: tuple[tuple[str, Any], ...] = ()
 
+    def __post_init__(self) -> None:
+        # Selectors are read by selectors and written by handlers, and the
+        # dataclass is frozen so the mapping is the only thing that could drift.
+        object.__setattr__(self, "selectors", MappingProxyType(dict(self.selectors)))
+
     @classmethod
     def from_tags(cls, tags: Iterable[Any]) -> RoutingIntent:
-        """Seed an intent from parsed bangtags.
+        """Seed an intent from parsed bangtags, naming nothing.
 
-        Recognised tag values become first-class fields so selectors do not
-        have to re-parse strings:
-
-        - ``route=<provider/model>`` or ``route=<model>`` -> ``provider``/``model``
-        - ``provider=<name>`` -> ``provider``
-        - ``model=<name>`` -> ``model``
-        - ``not=<provider/model>`` -> ``exclude``
-        - ``only=<provider/model>`` -> ``require``
-
-        Unrecognised values are left alone: they stay in ``tags`` and are the
-        selector's business, which is the whole point of the tag namespace.
+        Every tag lands in :attr:`tags`, every valued tag in
+        :attr:`selectors`, and every namespaced tag in :attr:`qualified`. The
+        typed fields stay empty on purpose: something has to *decide* that
+        ``route=`` means a model, and that something is a handler in
+        :mod:`margAI.builtin_tags` -- the same place a third-party pack puts
+        its own directives. Seeding it here instead is what made the tag
+        vocabulary a closed set.
         """
-        provider = model = None
-        exclude: set[str] = set()
-        require: set[str] = set()
         names: list[str] = []
+        qualified: list[str] = []
+        selectors: dict[str, list[str]] = {}
         for tag in tags:
             name = getattr(tag, "name", None)
             if not name:
                 continue
             names.append(name)
+            full = qualify(tag)
+            if full and ":" in full:
+                qualified.append(full)
             value = getattr(tag, "value", None)
-            if not value:
-                continue
-            if name == "route":
-                if "/" in value:
-                    provider, _, model = value.partition("/")
-                else:
-                    model = value
-            elif name == "provider":
-                provider = value
-            elif name == "model":
-                model = value
-            elif name == "not":
-                exclude.add(value)
-            elif name == "only":
-                require.add(value)
+            if value:
+                selectors.setdefault(name, []).append(value)
         return cls(
-            model=model,
-            provider=provider,
             tags=tuple(names),
-            exclude=frozenset(exclude),
-            require=frozenset(require),
+            qualified=tuple(qualified),
+            selectors={name: tuple(values) for name, values in selectors.items()},
         )
 
     def with_(self, **changes: Any) -> RoutingIntent:
@@ -99,6 +97,33 @@ class RoutingIntent:
 
     def wants(self, tag: str) -> bool:
         return tag in self.tags
+
+    def values_for(self, name: str) -> tuple[str, ...]:
+        """Every value given to selector ``name``, in the order written.
+
+        Empty when the tag appeared bare (``!margAI: cheap``) or not at all,
+        which is why a handler that needs a value checks :meth:`has` first or
+        uses :meth:`value`.
+        """
+        return self.selectors.get(name, ())
+
+    def has(self, name: str) -> bool:
+        """Whether selector ``name`` appeared at all, valued or bare."""
+        return name in self.tags
+
+    def value(self, name: str, default: str | None = None) -> str | None:
+        """The first value given to selector ``name``."""
+        for candidate in self.values_for(name):
+            return candidate
+        return default
+
+    def from_namespace(self, namespace: str) -> tuple[str, ...]:
+        """Qualified names belonging to ``namespace`` -- what a pack's
+        selectors filter on without string surgery."""
+        from .tags import namespace_key
+
+        prefix = f"{namespace_key(namespace)}:"
+        return tuple(name for name in self.qualified if name.startswith(prefix))
 
     def note(self, key: str, value: Any) -> RoutingIntent:
         """Attach an advisory note (merged with any existing value for ``key``)."""
@@ -158,6 +183,8 @@ class RoutingIntent:
             "model": self.model,
             "provider": self.provider,
             "tags": list(self.tags),
+            "qualified": list(self.qualified),
+            "selectors": {name: list(values) for name, values in self.selectors.items()},
             "exclude": sorted(self.exclude),
             "require": sorted(self.require),
             "max_cost_per_1m": self.max_cost_per_1m,

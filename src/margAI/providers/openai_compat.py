@@ -80,10 +80,13 @@ class Provider(ABC):
         the stream.
         """
 
-    # -- legacy text completions ----------------------------------------------
-    # Providers that don't speak the legacy completions surface (Anthropic, for
-    # one) inherit these 404-raising fallbacks, so `/v1/completions` degrades
-    # cleanly instead of 500-ing.
+    # -- non-chat kinds ------------------------------------------------------
+    # Providers that don't speak a given kind (Anthropic, for one) inherit
+    # these 404-raising fallbacks, so `/v1/embeddings` and friends degrade
+    # cleanly instead of 500-ing. Every kind in `Wrapper._KIND_PREPARE` needs
+    # both halves of its pair here; without them a provider that only
+    # implements chat hits an `AttributeError` and the client sees a redacted
+    # 500 for what is really "that provider can't do that".
 
     def prepare_completions(self, ctx: Any) -> PreparedRequest:
         raise _unsupported(self.name, "/v1/completions")
@@ -93,6 +96,24 @@ class Provider(ABC):
 
     def parse_completion_chunk(self, raw_line: str, ctx: Any) -> dict | DoneSentinel | None:
         raise _unsupported(self.name, "/v1/completions")
+
+    def prepare_embeddings(self, ctx: Any) -> PreparedRequest:
+        raise _unsupported(self.name, "/v1/embeddings")
+
+    def parse_embeddings_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
+        raise _unsupported(self.name, "/v1/embeddings")
+
+    def prepare_images_generations(self, ctx: Any) -> PreparedRequest:
+        raise _unsupported(self.name, "/v1/images/generations")
+
+    def parse_images_generations_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
+        raise _unsupported(self.name, "/v1/images/generations")
+
+    def prepare_audio_transcriptions(self, ctx: Any) -> PreparedRequest:
+        raise _unsupported(self.name, "/v1/audio/transcriptions")
+
+    def parse_audio_transcriptions_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
+        raise _unsupported(self.name, "/v1/audio/transcriptions")
 
     def extract_usage(self, payload: dict) -> dict[str, Any]:
         """Pull token usage out of an OpenAI-shaped payload/chunk."""
@@ -113,7 +134,7 @@ class OpenAICompatProvider(Provider):
     # -- chat ---------------------------------------------------------------
 
     def prepare_chat(self, ctx: Any) -> PreparedRequest:
-        return self._json(ctx.body, "chat", "completions")
+        return self._json(_with_stream_usage(ctx.body), "chat", "completions")
 
     def parse_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
         return _openai_body(resp, {"choices": []})
@@ -124,7 +145,7 @@ class OpenAICompatProvider(Provider):
     # -- legacy completions --------------------------------------------------
 
     def prepare_completions(self, ctx: Any) -> PreparedRequest:
-        return self._json(ctx.body, "completions")
+        return self._json(_with_stream_usage(ctx.body), "completions")
 
     def parse_completion_response(self, resp: UpstreamResponse, ctx: Any) -> tuple[dict, int]:
         return _openai_body(resp, {"choices": []})
@@ -201,6 +222,32 @@ class OpenAICompatProvider(Provider):
             json=body,
             timeout=self.config.timeout,
         )
+
+
+def _with_stream_usage(body: Any) -> Any:
+    """Ask a streaming upstream to include token usage, per the OpenAI API.
+
+    The OpenAI-compatible spec emits ``usage`` in a stream only when the
+    request sets ``stream_options.include_usage``; without it the final chunk
+    carries no counts, so a streamed call is invisible to telemetry and to the
+    spend ledger. Setting it is the API's own mechanism, not an invention, and
+    it is a no-op on upstreams that ignore the field.
+
+    Only added when ``stream`` is set, and never allowed to overwrite an option
+    the caller already chose -- an explicit ``include_usage: false`` is a
+    deliberate opt-out and is left alone. A caller-supplied ``stream_options``
+    is merged rather than replaced, so other options survive.
+    """
+    if not isinstance(body, dict) or not body.get("stream"):
+        return body
+    options = body.get("stream_options")
+    if not isinstance(options, dict):
+        options = {}
+    if "include_usage" in options:
+        return body
+    out = dict(body)
+    out["stream_options"] = {**options, "include_usage": True}
+    return out
 
 
 def _form_value(value: Any) -> str:

@@ -41,7 +41,7 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 from .config import Config
 from .core import DONE
@@ -61,6 +61,7 @@ from .core.marglets import (
     MargletRegistry,
 )
 from .core.protocol import PreparedRequest, Transport, UpstreamStream
+from .core.responses import ControlSignal, ErrorResponse, ImmediateResponse, RouteOverride
 from .core.router import ModelRouter, Route
 from .core.tags import RESERVED_NAMESPACE, ROOT_PACK, TagRegistry, qualify
 from .core.virtual import CostTable, VirtualModels
@@ -83,6 +84,27 @@ _SSE_DONE = "data: [DONE]\n\n"
 # installs at -100, so this lands after it: tags exist by the time the
 # tag-keyed handlers (and therefore every marglet) run.
 _EVENT_ORDER = -50
+
+
+class _ShortCircuit(Exception):
+    """A ``before`` handler answered the call itself.
+
+    ``ctx.respond()`` and ``ctx.error()`` both end the call, but they end it
+    *inside* :meth:`Wrapper._prepare`, which is where the request hooks run and
+    where the provider is still unresolved. Raising keeps that decision on the
+    way out rather than threading a second return type through every caller.
+    The message is never read -- the signal carries the readable body -- so it
+    names the type rather than repeating the payload.
+    """
+
+    def __init__(self, signal: ImmediateResponse | ErrorResponse, ctx: RequestContext) -> None:
+        super().__init__(type(signal).__name__)
+        self.signal = signal
+        # Carried rather than read back off the exception: the caller still has
+        # no context of its own, because `_prepare` never returned one. Without
+        # this the answered call could not be recorded, and a cache that leaves
+        # no trace cannot be measured.
+        self.ctx = ctx
 
 
 @dataclass
@@ -174,12 +196,15 @@ class Wrapper:
         # Wired here, not lazily on first use: registration order must not
         # decide where the event dispatchers sit relative to user hooks.
         self._wire_event_dispatch()
-        # Built-in tags are NO LONGER auto-installed. Users opt-in explicitly:
-        #   from margAI.builtin_tags import install
-        #   install(wrapper)
-        # Or use Gateway(load_builtin_tags=True)
-        # This removes "hidden magic" and makes it clear users write their own handlers.
-        
+
+        # The built-in tag pack ships inside this distribution, so the
+        # `margAI.packs` entry point group -- which only ever finds *third-party*
+        # packs -- cannot report it. Installing it through the same machinery
+        # keeps one code path, gives it a record for `margAI doctor`, and means
+        # `route=` / `provider=` / `model=` work with no setup. Opt out by name:
+        #   [packs."margAI.builtin_tags"]
+        #   enabled = false
+
         # Third-party packs, found through the `margAI.packs` entry point
         # group.
         self.pack_failures: list[Any] = []
@@ -417,14 +442,17 @@ class Wrapper:
         """
 
         @self.before(name="events:before", order=_EVENT_ORDER)
-        async def _dispatch_before(ctx: RequestContext) -> None:
+        async def _dispatch_before(ctx: RequestContext) -> Any:
             tags = self._dispatch_tags(ctx)
             if not tags:
-                return
+                return None
             self._check_tags(tags)
             if self.marglets:
                 ctx.state[ACTIVE_KEY] = [m.name for m in self.marglets.active(tags)]
-            await self._events.run_before(tags, ctx)
+            # Returned, not just awaited: a handler may have taken the call over
+            # with `ctx.route_to`/`ctx.respond`/`ctx.error`, and `_prepare` is
+            # the only thing that can act on that.
+            return await self._events.run_before(tags, ctx)
 
         @self.after(name="events:after")
         async def _dispatch_after(payload: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -698,13 +726,43 @@ class Wrapper:
                 400, str(exc), error_type="invalid_request_error", param="config"
             ) from exc
         try:
+            override: RouteOverride | None = None
             for hook in self._hooks.requests():
                 out = await maybe_await(hook.fn(ctx))
-                if out is not None:
-                    ctx.body = out
+                if out is None:
+                    continue
+                if isinstance(out, ControlSignal):
+                    # A `before` handler answered the call itself. A route
+                    # override is applied and the pipeline carries on; a
+                    # response or an error ends it here, before any provider is
+                    # resolved -- so a call answered from a cache does not need
+                    # a model that exists, and a rejected one is never attempted.
+                    if isinstance(out, RouteOverride):
+                        override = out
+                        break
+                    if isinstance(out, (ImmediateResponse, ErrorResponse)):
+                        raise _ShortCircuit(out, ctx)
+                    # A fourth signal type, added later without a case here.
+                    # Failing loudly beats treating a control signal as a
+                    # rewritten request body.
+                    raise TypeError(f"unhandled control signal: {type(out).__name__}")
+                ctx.body = out
+
+            if override is not None:
+                # Recorded before it is overwritten, so telemetry still shows
+                # what the caller asked for next to what it was given.
+                requested = ctx.body.get("model")
+                ctx.body["model"] = override.model
+            else:
+                requested = None
 
             route = self._resolve(ctx)
-            ctx.request_model = ctx.body.get("model")
+            if override is not None:
+                # `_resolve` only stamps a reason on a dynamic call, so a
+                # concrete override would otherwise be unattributable in
+                # telemetry.
+                ctx.state[ROUTE_REASON_KEY] = "handler:route"
+            ctx.request_model = ctx.body.get("model") if requested is None else requested
             ctx.provider, ctx.upstream_model = route.provider, route.model
             ctx.body["model"] = route.model
             provider = self.providers[route.provider]
@@ -924,11 +982,34 @@ class Wrapper:
             payload = await self._hooks.apply_response(payload, ctx)
             self.telemetry.emit(self._record(ctx, status=status, usage=provider.extract_usage(payload), source=kind))
             return GatewayResponse(body=payload, status=status)
+        except _ShortCircuit as sc:
+            return self._answered(sc, kind)
         except ApiError as exc:
             return await self._fail(exc, ctx, kind, exc.status, exc.message)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("unhandled error in wrapper.complete")
             return await self._fail(exc, ctx, kind, 500, repr(exc))
+
+    def _answered(self, sc: _ShortCircuit, kind: str) -> GatewayResponse:
+        """Turn a ``before`` handler's answer into a response, and record it.
+
+        The ``after`` and ``error`` phases are skipped: there is no upstream
+        answer to shape and no failure to explain. Telemetry still records the
+        call, because the caller-facing telemetry is the only place a cache hit
+        can be seen at all -- and the record's provider and upstream model are
+        empty, which is honest: nothing was resolved. ``route_reason`` says a
+        handler answered, so a report can tell that from a served call.
+        """
+        signal = sc.signal
+        if isinstance(signal, ErrorResponse):
+            status: int = signal.status
+            body = signal.to_dict()
+        else:
+            status = 200
+            body = signal.payload
+        sc.ctx.state[ROUTE_REASON_KEY] = "handler:answer"
+        self.telemetry.emit(self._record(sc.ctx, status=status, source=kind))
+        return GatewayResponse(body=body, status=status)
 
     async def _fail(
         self, exc: Exception, ctx: RequestContext | None, kind: str, status: int, error: str
@@ -963,7 +1044,7 @@ class Wrapper:
 
     async def open_stream(
         self, body: dict[str, Any], *, kind: str = "chat", config: str | Mapping[str, Any] | None = None
-    ) -> StreamHandle:
+    ) -> StreamSource:
         """Open a streaming completion. ``config`` behaves as in :meth:`complete`."""
         """Open the upstream stream. Raises :class:`ApiError` (or any other
         exception) *before* any SSE bytes would be sent, so the caller can
@@ -993,6 +1074,8 @@ class Wrapper:
                 except Exception:
                     err_body = None
                 raise ApiError.from_openai_body(err_body, implicit_status=upstream.status)
+        except _ShortCircuit as sc:
+            return self._answer_stream(sc, kind)
         except ApiError as exc:
             handled = await self._on_failure(exc, ctx, kind=kind, status=exc.status, error=exc.message)
             if handled is not None:
@@ -1011,6 +1094,30 @@ class Wrapper:
                 raise ApiError(500, "Internal server error", error_type="server_error", body=handled) from exc
             raise
         return StreamHandle(self, ctx, provider, upstream, kind=kind)
+
+    def _answer_stream(self, sc: _ShortCircuit, kind: str) -> StreamSource:
+        """Answer a streaming call that a ``before`` handler finished itself.
+
+        ``ctx.error()`` still raises: this is the preflight, no SSE byte has
+        been written, and the transport can still answer with a JSON error --
+        which is what a client parsing an error expects, and what
+        ``_fail`` does everywhere else.
+
+        ``ctx.respond()`` cannot, because the client asked for SSE. The cached
+        body goes out as a single frame followed by ``[DONE]``, so a streaming
+        client sees a well-formed one-frame stream rather than a JSON body it
+        would have to be taught to accept.
+        """
+        signal = sc.signal
+        if isinstance(signal, ErrorResponse):
+            self._answered(sc, kind)
+            raise ApiError(
+                signal.status,
+                signal.message,
+                error_type=signal.error_type,
+                body=signal.to_dict(),
+            )
+        return _ImmediateStream(signal.payload)
 
     # -- model catalog ------------------------------------------------------
 
@@ -1128,7 +1235,35 @@ class Wrapper:
         self._catalog_at = 0.0
 
 
-class StreamHandle:
+class StreamSource(Protocol):
+    """What a transport needs from an open stream: the SSE lines.
+
+    Narrower than :class:`StreamHandle` on purpose. A stream can be served
+    without ever opening an upstream connection -- a ``before`` handler that
+    answered the call from a cache is the real case -- and a transport should
+    not have to know which of the two it is holding.
+    """
+
+    def lines(self) -> AsyncIterator[str]: ...
+
+
+class _ImmediateStream:
+    """A stream that a ``before`` handler answered without an upstream.
+
+    The payload is one frame: a cached completion is already whole, and
+    splitting it into deltas to imitate a live token stream would be inventing
+    tokens that were never generated.
+    """
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    async def lines(self) -> AsyncIterator[str]:
+        yield f"data: {json.dumps(self._payload, ensure_ascii=False)}\n\n"
+        yield _SSE_DONE
+
+
+class StreamHandle(StreamSource):
     """Held-open upstream stream + the per-chunk hook pipeline.
 
     Constructed by :meth:`Wrapper.open_stream`; its :meth:`lines` generator

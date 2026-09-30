@@ -1,31 +1,92 @@
 [project]
 name = "margAI"
-version = "0.1.0"
-description = "Portable LLM wrapper framework: configurable interceptors around any upstream provider."
+# Read from `src/margAI/__init__.py` via `[tool.hatch.version]` below. Two
+# copies of a version number is one more copy to forget at tag time, and the
+# failure is a release that installs under a version nobody intended.
+dynamic = ["version"]
+description = "An OpenAI-compatible LLM gateway: bangtags, virtual models, and a hook pipeline in front of any upstream provider."
 readme = "README.md"
+authors = [
+    { name = "Vish Ganapathy", email = "vish.ganapathy@gmail.com" },
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
-keywords = ["llm", "proxy", "gateway", "openai", "anthropic", "middleware", "hooks"]
+keywords = [
+    "llm",
+    "proxy",
+    "gateway",
+    "openai",
+    "anthropic",
+    "router",
+    "middleware",
+    "hooks",
+    "fastapi",
+]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
-    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Internet :: Proxy Servers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
 ]
+# `pydantic` is imported directly by the request and response models, so it is a
+# real dependency and not merely something fastapi happens to pull in. Pinning it
+# only as a transitive would let a fastapi release change the validation
+# semantics the documented schemas are built on.
 dependencies = [
     "fastapi>=0.141.1",
     "httpx>=0.27.0",
+    "pydantic>=2.13.5",
     "python-multipart>=0.0.9",
     "uvicorn>=0.53.0",
+]
+
+[project.optional-dependencies]
+# Also published as a PEP 735 dependency-group below, because `uv sync` reads
+# one and `pip install margAI[dev]` reads the other, and a contributor should not
+# have to know which one this project happens to use.
+dev = [
+    "httpx2>=0.1",
+    "mypy>=2.3.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    # Parses the workflow files so a test can assert the publish job really is
+    # the two steps PyPI recommends, rather than grepping for strings.
+    "pyyaml>=6.0",
+    "ruff>=0.16.9",
 ]
 
 [project.scripts]
 margAI = "margAI.__main__:run"
 
+[project.urls]
+Homepage = "https://github.com/evolvedHow/margAI"
+Repository = "https://github.com/evolvedHow/margAI"
+Issues = "https://github.com/evolvedHow/margAI/issues"
+Changelog = "https://github.com/evolvedHow/margAI/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
+    # starlette's TestClient has moved to `httpx2`; without it the suite passes
+    # but prints a deprecation warning on every run, which trains people to
+    # ignore warnings. Test-only -- the library itself still speaks `httpx`.
+    "httpx2>=0.1",
     "mypy>=2.3.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Parses the workflow files so a test can assert the publish job really is
+    # the two steps PyPI recommends, rather than grepping for strings.
+    "pyyaml>=6.0",
     "ruff>=0.16.9",
 ]
 
@@ -33,8 +94,51 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+# The one place the version lives. `margAI.__version__` is generated from it at
+# build time, so `pip show margai` and `margAI.__version__` cannot disagree.
+path = "src/margAI/__init__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/margAI", "src/margAI/examples"]
+# `examples` is a subpackage of `src/margAI`, so listing it again here made
+# hatchling add `margAI/examples/__init__.py` to the archive twice and the
+# build failed outright -- the package could not be installed at all.
+#
+# `_default.toml` rides along because it lives inside the listed package. It is
+# named explicitly below so that a future `exclude` or an ignore-rule mistake
+# fails the build loudly here instead of silently shipping a gateway whose
+# embedded defaults have gone missing.
+packages = ["src/margAI"]
+# `_default.toml` and `py.typed` ride along because they are data, not code, and
+# hatchling's default include rules are easy to narrow by accident. They are
+# named explicitly so that a future `exclude` or an ignore-rule mistake fails the
+# build loudly here instead of silently shipping a gateway whose embedded
+# defaults have gone missing, or one that claims `Typing :: Typed` without the
+# marker that makes it true.
+artifacts = ["src/margAI/_default.toml", "src/margAI/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+# `margAI.toml` is included deliberately: it is the documented example config
+# and it carries no credentials (every provider reads its key from an env var).
+# It must not be a real deployment's config, or a secret would ride along here.
+include = [
+    "src/margAI",
+    "tests",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    # Section 4(d) is only meaningful if the attribution notices actually travel
+    # with a source distribution, so NOTICE ships alongside the license rather
+    # than sitting in the repository alone.
+    "NOTICE",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "RELEASING.md",
+    "margAI.toml",
+    "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -45,7 +149,21 @@ line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RET", "RUF", "TRY"]
+select = [
+    "E", "F", "I", "UP", "B", "SIM", "RET", "RUF", "TRY",
+    # Below: correctness and performance families that are already clean, so
+    # turning them on is free and keeps them from regressing.
+    "A",     # builtin shadowing
+    "C4",    # comprehensions (list/dict/set built by hand)
+    "DTZ",   # naive datetime -- `.now()` without a tz is always a bug
+    "ICN",   # import conventions (numpy/pandas namespaces)
+    "ISC",   # implicit string concatenation, i.e. a missing comma
+    "PERF",  # perflint: hand-rolled loops that the stdlib does faster
+    "PIE",   # misc lints
+    "PT",    # flake8-pytest-style
+    "PTH",   # os.path -> pathlib
+    "TID",   # tidy-imports
+]
 ignore = [
     # FastAPI's dependency-injection idiom *is* a call in a default argument.
     "B008",
@@ -64,7 +182,28 @@ ignore = [
     # `class HookKind(str, Enum)` is deliberate: it keeps the wire/JSON form
     # identical to the enum without a conversion at every comparison.
     "UP042",
+    # Relative imports are the convention throughout `src/margAI`: the package
+    # ships as `margAI`, and absolute self-imports would hard-code that name
+    # into every module for no benefit.
+    "TID252",
 ]
+
+# Deliberately NOT enabled, with the reason, so a future "just turn on
+# everything" sweep does not fight the design:
+#
+#   ANN  -- the plugin surface (`fn(ctx, tag)`, `Any` bodies) is intentionally
+#           untyped. Turning it on globally would either be ignored per-file or
+#           push `Any` through the pipeline anyway. Tracked per-module in
+#           [[tool.mypy.overrides]] below instead.
+#   ARG  -- hooks share one signature and most ignore `tag`; that is the API,
+#           not an oversight.
+#   N    -- `N999` fires on the `margAI` package name. The capital A is the
+#           project's identity, and renaming it is a breaking API change.
+#   D    -- 200+ hits are almost all in `tests/` and `examples/`, which document
+#           themselves through readable code instead of docstrings.
+#   PL   -- `PLR2004` magic values and `PLC0415` lazy imports. The lazy imports
+#           are load-bearing: `hooks.load` must not import until the app is up.
+#   FBT  -- `prepend: bool` reads better positionally in `add_system_prompt`.
 
 [tool.ruff.lint.per-file-ignores]
 # Tests import broadly and shadow names on purpose; conftest is a shared
@@ -75,9 +214,10 @@ ignore = [
 [tool.mypy]
 python_version = "3.12"
 warn_unused_configs = true
-# Untyped handler/plugin boundaries are the framework's extension points; the
-# decorator surface hands whatever the user wrote straight to the pipeline.
-disallow_untyped_defs = false
+# Decorator surfaces are now annotated; disallow_untyped_defs is on everywhere.
+# Tests remain intentionally permissive: fixture signatures mirror the
+# framework's own extension points.
+disallow_untyped_defs = true
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

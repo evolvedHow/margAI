@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -15,8 +16,10 @@ from conftest import (
 )
 
 from margAI import ApiError
+from margAI.config import TelemetryConfig
 from margAI.core.errors import DONE
 from margAI.providers.openai_compat import OpenAICompatProvider
+from margAI.telemetry import Telemetry
 
 
 async def collect(handle):
@@ -177,3 +180,66 @@ def provider_instance():
     from conftest import provider_config
 
     return OpenAICompatProvider(provider_config())
+
+# -- preflight failures ---------------------------------------------------
+
+
+def test_a_non_streamable_kind_is_reported_not_swallowed():
+    """The guard used to sit outside the try, so an embeddings `stream=True`
+    raised a bare ApiError: no error hook, no telemetry, and a caller had no
+    way to tell the call never happened."""
+    w = make_wrapper(FakeTransport())
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(w.open_stream(chat_body(), kind="embeddings"))
+    assert exc.value.status == 400
+    assert "does not support streaming" in exc.value.message
+
+
+def test_a_non_streamable_kind_is_still_recorded_in_telemetry():
+    """Moving the guard inside the try is what buys this. It cannot reach the
+    error hooks -- those are `fn(exc, ctx)` and no context exists yet -- but a
+    rejected call must not vanish from the record either."""
+    records: list = []
+    w = make_wrapper(
+        FakeTransport(),
+        telemetry=Telemetry(TelemetryConfig(enabled=True, emit="callback"), callback=records.append),
+    )
+    with pytest.raises(ApiError):
+        asyncio.run(w.open_stream(chat_body(), kind="embeddings"))
+    assert len(records) == 1
+    assert records[0].status == 400
+    assert records[0].error == "Kind 'embeddings' does not support streaming"
+
+
+def test_an_error_hook_body_survives_a_non_ApiError_preflight_failure():
+    """A non-ApiError failure used to drop whatever the error hook said, so
+    the hook only worked for the one exception class that already had a
+    body -- which is the opposite of when you need it."""
+    class Boom(Exception):
+        pass
+
+    async def explode(req):
+        raise Boom("upstream on fire")
+
+    w = make_wrapper(FakeTransport(streams=[explode]))
+
+    @w.error
+    def shape(exc, ctx):
+        return {"error": {"message": f"shaped: {type(exc).__name__}", "type": "shaped"}}
+
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(w.open_stream(chat_body()))
+    assert exc.value.status == 500
+    assert exc.value.body == {"error": {"message": "shaped: Boom", "type": "shaped"}}
+
+
+def test_a_non_ApiError_preflight_failure_without_a_hook_body_reraises_the_original():
+    """Nothing shaped the body, so the original exception propagates rather
+    than being wrapped. `transport.fastapi` catches it and answers a redacted
+    500; the traceback stays intact for the log."""
+    def explode(req):
+        raise RuntimeError("nope")
+
+    w = make_wrapper(FakeTransport(streams=[explode]))
+    with pytest.raises(RuntimeError, match="nope"):
+        asyncio.run(w.open_stream(chat_body()))

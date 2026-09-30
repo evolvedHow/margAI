@@ -41,7 +41,7 @@ class HookKind(str, Enum):
     ERROR = "error"
 
 
-@dataclass
+@dataclass(slots=True)
 class Hook:
     kind: HookKind
     fn: HookFn
@@ -57,32 +57,53 @@ async def maybe_await(result: Any) -> Any:
 
 
 class HookRegistry:
-    """Ordered collection of registered hooks."""
+    """Ordered collection of registered hooks.
+
+    The per-kind orderings are computed once at registration and reused.
+    Previously every accessor re-filtered and re-sorted the full list on every
+    call, and ``apply_stream`` runs those accessors *per SSE chunk* -- so a
+    long answer paid for a full sort of every hook on every token, to produce
+    a list that had not changed since the last one. Registration is the only
+    thing that can change the order, and it is rare.
+    """
 
     def __init__(self) -> None:
         self._hooks: list[Hook] = []
+        self._ordered: dict[HookKind, list[Hook]] = {kind: [] for kind in HookKind}
 
     def register(self, kind: HookKind, fn: HookFn, name: str, order: int = 0) -> Hook:
         hook = Hook(kind=kind, fn=fn, name=name, order=order, seq=len(self._hooks))
         self._hooks.append(hook)
+        # Insert rather than re-sort: `seq` is monotonically increasing, so a
+        # hook at the default order always lands at the end of its peers and
+        # the common append is O(1). Only an explicit `order` that sorts
+        # before the current tail needs the bucket reordered.
+        bucket = self._ordered[kind]
+        bucket.append(hook)
+        if len(bucket) > 1 and bucket[-2].order > order:
+            bucket.sort(key=lambda h: (h.order, h.seq))
         return hook
 
-    def _sorted(self, kind: HookKind, *, reverse: bool) -> list[Hook]:
-        hooks = [h for h in self._hooks if h.kind is kind]
-        hooks.sort(key=lambda h: (h.order, h.seq), reverse=reverse)
-        return hooks
-
     def requests(self) -> list[Hook]:
-        return self._sorted(HookKind.REQUEST, reverse=False)
+        """Request hooks, ascending ``(order, seq)``.
+
+        A copy, like the three accessors below it. Handing back the internal
+        list would let any caller reorder or clear the registry's hook order
+        by mutating what looked like a read-only view.
+        """
+        return list(self._ordered[HookKind.REQUEST])
 
     def responses(self) -> list[Hook]:
-        return self._sorted(HookKind.RESPONSE, reverse=True)
+        """Response hooks, descending -- the middleware-unwind order."""
+        return self._ordered[HookKind.RESPONSE][::-1]
 
     def streams(self) -> list[Hook]:
-        return self._sorted(HookKind.STREAM, reverse=True)
+        """Stream hooks, descending. Called per SSE chunk."""
+        return self._ordered[HookKind.STREAM][::-1]
 
     def errors(self) -> list[Hook]:
-        return self._sorted(HookKind.ERROR, reverse=True)
+        """Error hooks, descending."""
+        return self._ordered[HookKind.ERROR][::-1]
 
     def count(self, kind: HookKind | None = None) -> int:
         if kind is None:

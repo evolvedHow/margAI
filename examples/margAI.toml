@@ -38,5 +38,7 @@ default_model = "gpt-4o"
 [providers.local]
 kind = "openai-compatible"
 base_url = "http://127.0.0.1:8080/v1"
-api_key_env = ""
+# No `api_key_env` line: a local server usually needs no key. An empty
+# `api_key_env = ""` is rejected on purpose -- it always means "I meant to
+# configure this and didn't".
 models = ["qwen2.5-coder"]

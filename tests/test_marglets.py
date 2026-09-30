@@ -16,6 +16,7 @@ from conftest import (
 )
 
 from margAI import install_bangtags
+from margAI.bangtag import Tag
 from margAI.core.marglets import Marglet, MargletRegistry
 
 
@@ -242,7 +243,9 @@ def test_registry_lookup_rules():
     reg = MargletRegistry()
     reg.add(Marglet("a"))
     found = reg.get("a")
-    assert "a" in reg and found is not None and found.name == "a"
+    assert "a" in reg
+    assert found is not None
+    assert found.name == "a"
     assert reg.get("missing") is None
     assert len(reg) == 1
     assert [m.name for m in reg] == ["a"]
@@ -291,9 +294,114 @@ def test_bangtag_install_is_idempotent_per_namespace():
     install_bangtags(w)  # same namespace again: no-op
     install_bangtags(w, namespace="acme")  # a different one must still register
 
-    # install_bangtags registers a per-call request hook, so look there.
+    # install_bangtags registers a per-call request hook, so look there. The
+    # name keeps the spelling the namespace was written in -- matching folds
+    # case, but a hook name is something a human reads.
     names = [h.name for h in w._hooks.requests()]
-    assert names.count("bangtags:margai") == 1
+    assert names.count("bangtags:margAI") == 1
     assert names.count("bangtags:acme") == 1
     # The guard must not leave bookkeeping on the object it was handed.
     assert not hasattr(w, "_bangtags_installed")
+
+
+# -- the tag source --------------------------------------------------------
+
+
+def test_a_custom_state_key_is_actually_read_back():
+    """`install_bangtags(state_key=...)` used to write tags under a key that
+    nothing read, so every handler silently stopped firing."""
+    t = FakeTransport(responses=[UpstreamResponse(200, chat_payload("hi"))])
+    w = make_wrapper(t)
+    install_bangtags(w, state_key="acme")
+    seen: list[str] = []
+
+    @w.before("refine")
+    def refine(ctx, tag):
+        seen.append(tag.name)
+
+    r = asyncio.run(w.complete(chat("hi", tag="refine")))
+    assert r.status == 200
+    assert seen == ["refine"]
+
+
+def test_set_tags_feeds_the_event_dispatch_without_bangtags():
+    """The documented alternative to install_bangtags: no `!margAI:` syntax at
+    all, just a request hook that sets the tags."""
+    w, _ = ok_wrapper()
+    seen: list[str] = []
+
+    @w.before(order=-100)
+    def tag_it(ctx):
+        ctx.set_tags([Tag("refine")])
+
+    @w.before("refine")
+    def refine(ctx, tag):
+        seen.append(tag.name)
+
+    asyncio.run(w.complete(chat()))
+    assert seen == ["refine"]
+
+
+def test_set_tags_honours_a_custom_key():
+    w, _ = ok_wrapper()
+    seen: list[str] = []
+    captured: list = []
+
+    @w.before(order=-100)
+    def tag_it(ctx):
+        ctx.set_tags([Tag("refine")], key="acme")
+        captured.append((ctx.tags_key, list(ctx.tags)))
+
+    @w.before("refine")
+    def refine(ctx, tag):
+        seen.append(tag.name)
+
+    asyncio.run(w.complete(chat()))
+    assert seen == ["refine"]
+    assert captured == [("acme", [Tag("refine")])]
+
+
+# -- replace=True ---------------------------------------------------------
+
+
+def test_replace_does_not_warn_about_the_replacement_it_asked_for(caplog):
+    """`replace=True` means the caller meant it, so rewiring a marglet's phases
+    must not emit the 'my hook just stopped running' warning for each one."""
+    w, _ = ok_wrapper()
+    w.add_marglet(Marglet("terse", before=lambda ctx, tag: None, summary="first"))
+    with caplog.at_level("WARNING", logger="margAI.events"):
+        w.add_marglet(Marglet("terse", before=lambda ctx, tag: None, summary="second"), replace=True)
+    assert caplog.records == []
+    assert w.marglets.get("terse").summary == "second"
+
+
+def test_an_uninvited_duplicate_name_still_warns(caplog):
+    """The warning is load-bearing for the accidental case, which is the one
+    it was written for -- so make sure silencing the deliberate case did not
+    silence this one."""
+    w, _ = ok_wrapper()
+    w.events.before("terse")(lambda ctx, tag: None)
+    with caplog.at_level("WARNING", logger="margAI.events"):
+        w.events.before("terse")(lambda ctx, tag: None)
+    assert len(caplog.records) == 1
+    assert "replacing before handler" in caplog.records[0].message
+
+
+def test_displacing_a_built_in_tag_from_app_code_warns(caplog):
+    """`!margAI: route=` is a built-in, so an application that registers its
+    own handler for `route` has silently redefined a documented tag. That is
+    allowed -- it is the escape hatch -- but it is never silent."""
+    w, _ = ok_wrapper()
+    with caplog.at_level("WARNING", logger="margAI.events"):
+        w.events.before("route")(lambda ctx, tag: None)
+    assert any("replacing before handler" in r.message for r in caplog.records)
+
+    # `replace=True` is how you say it on purpose, so the "my hook just stopped
+    # running" warning goes away -- and a more specific one takes its place,
+    # naming the pack that lost the tag.
+    caplog.clear()
+    w2, _ = ok_wrapper()
+    with caplog.at_level("WARNING", logger="margAI.events"):
+        w2.events.before("route", replace=True)(lambda ctx, tag: None)
+    assert [r for r in caplog.records if "replacing before handler" in r.message] == []
+    assert any("margAI.builtin_tags" in r.message for r in caplog.records)

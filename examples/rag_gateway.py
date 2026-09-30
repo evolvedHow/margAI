@@ -64,8 +64,9 @@ vector_db = MockVectorDB()
 cache = SimpleCache()
 
 
-# Create the gateway
-app = Gateway("examples/simple_gateway.toml")  # Or just Gateway() to use ./margAI.toml
+# Create the gateway. Resolved next to this file so the example runs from any
+# working directory, not only the repo root.
+app = Gateway(str(Path(__file__).parent / "simple_gateway.toml"))
 
 
 # Define tags
@@ -73,7 +74,7 @@ app = Gateway("examples/simple_gateway.toml")  # Or just Gateway() to use ./marg
 def add_rag_context(ctx, tag):
     """Add vector DB context to the prompt.
     
-    Usage: !app: rag=quantum computing
+    Usage: !app: rag=quantum-computing
     """
     query = tag.value or ctx.last_user_message() or ""
     if not query:

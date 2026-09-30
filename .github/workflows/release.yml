@@ -1,0 +1,84 @@
+# Release
+#
+# This is the workflow PyPI trusts, so it is deliberately narrow: it runs only
+# on a version tag, and the job that actually holds the upload credential does
+# nothing but fetch a finished build and hand it over.
+#
+# Why not one job that builds and publishes? Because PyPI's guidance is that the
+# trusted job should be as small as possible -- every step in it is a step an
+# attacker with commit access could repurpose. Splitting build from publish means
+# the credential is only reachable from `download-artifact` and the publish
+# action itself.
+#
+# Why not publish from `ci.yml`? Because PyPI trusts a *workflow file*. Trusting
+# `ci.yml` would mean anyone who can edit a test or a lint step could also edit
+# the publish path. See the comment at the bottom of `ci.yml`.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build
+        run: uv build
+
+      - name: Validate the distributions
+        run: uvx twine check --strict dist/*
+
+      # The tag is only as good as the tree under it. The version in the
+      # filename is read from `src/margAI/__init__.py`; if it does not match the
+      # tag, publishing would burn a version number on the wrong name.
+      - name: Check the tag matches the package version
+        run: |
+          version=$(uv run python -c "import margAI; print(margAI.__version__)")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "tag says $tag, package says $version" >&2
+            exit 1
+          fi
+          echo "tag and package agree on $version"
+
+      - name: Install the built wheel and import it
+        run: |
+          uv venv /tmp/verify
+          VIRTUAL_ENV=/tmp/verify uv pip install dist/*.whl
+          /tmp/verify/bin/python -c "import margAI; print(margAI.__version__)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/margai
+    permissions:
+      # The only elevated permission in the repository. It trades this OIDC
+      # token for an upload token that expires in 15 minutes, so there is no
+      # long-lived secret stored anywhere. PyPI's own recommendation is these
+      # two steps and nothing else.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

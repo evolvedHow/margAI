@@ -27,18 +27,25 @@ from typing import Any
 
 __all__ = [
     "ACTIVE_KEY",
+    "DYNAMIC_KEY",
+    "PHASES",
+    "ROUTE_REASON_KEY",
     "Marglet",
     "MargletRegistry",
     "MargletSpec",
     "PhaseHooks",
 ]
 
-# Where the names of the marglets a call activated are recorded.
+# The four phase names. Canonical definition -- ``events.EVENTS`` and the
+# wrapper's marglet wiring both alias this, so the three can't drift.
+PHASES = ("before", "after", "stream", "error")
+
+# Keys inside ``RequestContext.state`` under the ``marglets.`` namespace.
 ACTIVE_KEY = "marglets.active"
+DYNAMIC_KEY = "marglets.dynamic"
+ROUTE_REASON_KEY = "marglets.route_reason"
 
 PhaseHooks = dict[str, Callable[..., Any] | None]
-
-PHASES = ("before", "after", "stream", "error")
 
 
 @dataclass(frozen=True)

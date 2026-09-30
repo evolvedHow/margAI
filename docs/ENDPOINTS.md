@@ -11,9 +11,20 @@ margAI routes five endpoint kinds. Every one of them is backed by a real
 | `images_generations` | `POST /v1/images/generations` | no | JSON |
 | `audio_transcriptions` | `POST /v1/audio/transcriptions` | no | multipart |
 | — | `GET /v1/models`, `GET /v1/models/{id}` | — | served by the wrapper |
+| — | `GET /v1/margAI/tags` | — | served by the wrapper |
 
 `GET /v1/models` always lists the reserved `margAI/<dynamic_model>` id, so a
 client using a model dropdown (LibreChat) can reach the dynamic router at all.
+
+`GET /v1/margAI/tags` is introspection rather than routing: it reports the
+registered tags by namespace, the configured virtual models, providers, packs,
+and config provenance — the same payload as `wrapper.describe()`. It exists
+because the alternative was answering "what bangtags does this gateway
+actually understand?" by reading its source.
+
+`margAI doctor` is the same idea for a terminal, with a pass/fail exit code
+for CI. It is a CLI, not a route, so it can be run against a config that would
+not start a server.
 
 ## Why the surface is small
 
@@ -67,6 +78,10 @@ Four edits, in this order. Keep them together or the surface rots again.
    also make the *route* skip model resolution. That is the trap the old
    surface fell into: see "Model-less kinds" below.
 
+   Add the 404-raising pair to the `Provider` base class as well, so any
+   provider that doesn't implement the kind degrades to a 404. See "Providers
+   that don't speak a kind" below.
+
 2. **`wrapper.py`** — add the two entries to `_KIND_PREPARE` / `_KIND_PARSE`
    next to the existing ones. These dicts are the routing table's source of
    truth; a kind in one and not the other is a bug.
@@ -101,26 +116,12 @@ The old code did none of these and shipped 400s instead.
 ## Providers that don't speak a kind
 
 `Provider` keeps `raise ApiError(404, "Provider 'x' does not support ...")`
-fallbacks for the legacy-completions surface so a provider like Anthropic
-degrades cleanly. New kinds should either get the same fallback or the
-provider should be honest about not implementing the abstract method.
+fallbacks for every non-chat kind, so a provider like Anthropic degrades
+cleanly. Both halves of each kind's pair need one — `prepare_<kind>` *and*
+`parse_<kind>_response` — or the failure lands a step later than the routing
+decision and the client sees a 500 for what is really a 404.
 
-## Model-less kinds
-
-A kind whose request has no `model` (`/v1/files`, `/v1/batches`) cannot be
-routed by the current `ModelRouter`, which requires one. If you add such a
-kind you must also pick how it picks a provider:
-
-- require the client to send an explicit `margAI/<provider>/...` id anyway
-  (current behaviour, but the client will not do it);
-- give the kind its own provider-selection hook;
-- or serve it from a single designated provider, bypassing the router.
-
-The old code did none of these and shipped 400s instead.
-
-## Providers that don't speak a kind
-
-`Provider` keeps `raise ApiError(404, "Provider 'x' does not support ...")`
-fallbacks for the legacy-completions surface so a provider like Anthropic
-degrades cleanly. New kinds should either get the same fallback or the
-provider should be honest about not implementing the abstract method.
+`Wrapper._provider_method` is the backstop for anything that slips through: a
+kind in `_KIND_PREPARE` that a provider has not implemented degrades to a 404
+naming the provider, not an `AttributeError` that surfaces as a redacted 500.
+New kinds should still get the explicit fallback.

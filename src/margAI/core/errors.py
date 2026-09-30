@@ -21,6 +21,10 @@ class DoneSentinel(Enum):
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return "<DONE>"
 
+    def __str__(self) -> str:
+        # Matches __repr__, so f-strings and logs don't disagree with each other.
+        return "<DONE>"
+
 
 DONE: Final[DoneSentinel] = DoneSentinel.TOKEN
 
@@ -76,15 +80,23 @@ class ApiError(Exception):
 
     @classmethod
     def from_openai_body(cls, body: Any, implicit_status: int = 500) -> ApiError:
-        """Best-effort parse of an upstream OpenAI-style error payload."""
+        """Best-effort parse of an upstream OpenAI-style error payload.
+
+        Nothing in here may raise: it runs on the failure path, so a parser
+        that blew up would turn an upstream 4xx into an unhandled 500 and lose
+        the very message it was trying to recover. Unknown or malformed fields
+        fall back rather than fail.
+        """
         if isinstance(body, dict):
             err = body.get("error")
             if isinstance(err, dict):
-                # Some providers (Anthropic) nest further: error.error.{...}
+                # Anthropic nests once: {"type": "error", "error": {...}},
+                # which this already handles. A few gateways double-wrap it, so
+                # unwrap one more level if that is what we are looking at.
                 if isinstance(err.get("error"), dict):
                     err = err["error"]
                 return cls(
-                    status=int(err.get("status") or implicit_status),
+                    status=_as_status(err.get("status"), implicit_status),
                     message=str(err.get("message") or "Upstream error"),
                     error_type=str(err.get("type") or "upstream_error"),
                     param=err.get("param"),
@@ -94,3 +106,22 @@ class ApiError(Exception):
         else:
             message = str(body) if body is not None else "Upstream error"
         return cls(status=implicit_status, message=message, error_type="upstream_error")
+
+
+def _as_status(value: Any, fallback: int) -> int:
+    """An int status out of an untrusted upstream field, or ``fallback``.
+
+    A non-numeric ``error.status`` must not raise out of :meth:`from_openai_body`
+    -- that is the error path, and an ``int()`` blowing up there discards the
+    real message for a generic 500.
+    """
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return fallback
+    return fallback

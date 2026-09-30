@@ -28,6 +28,13 @@ api_key_env = "OPENAI_API_KEY"
 models = ["gpt-4o", "gpt-4o-mini"]
 default_model = "gpt-4o"
 
+[providers.gemini]
+kind = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/models/"
+api_key_env = "GEMINI_API_KEY"
+models = ["gemini-flash-latest", "gemini-3.1-flash-lite"]
+default_model = "gemini-flash-latest"
+
 # Add more providers as needed:
 # [providers.anthropic]
 # kind = "anthropic"

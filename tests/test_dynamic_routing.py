@@ -166,14 +166,60 @@ def test_selector_returning_an_unknown_model_is_rejected_and_chain_continues():
 # -- the intent ------------------------------------------------------------
 
 
-def test_intent_from_bangtags_recognises_documented_values():
+def test_intent_records_tags_without_interpreting_them():
+    """The intent is a name-agnostic record. What `route=` *means* is claimed by
+    a handler in margAI.builtin_tags, like any other pack's directive -- so
+    this layer cannot know a tag vocabulary, and a pack can add to it."""
     intent = RoutingIntent.from_tags(_tags("route=local/qwen3, not=openai, only=llama3, cheap"))
+    assert intent.value("route") == "local/qwen3"
+    assert intent.value("not") == "openai"
+    assert intent.value("only") == "llama3"
+    assert intent.values_for("route") == ("local/qwen3",)
+    assert intent.has("cheap")
+    assert intent.wants("cheap")
+    # Nothing is claimed yet: only a handler can fill a typed field.
+    assert intent.provider is None
+    assert intent.model is None
+    assert intent.exclude == frozenset()
+    assert intent.require == frozenset()
+
+
+def test_a_pack_scoped_selector_is_recorded_qualified():
+    """`!hr: approve` must stay distinguishable from `!margAI: approve`, or one
+    domain's handler would answer another's tag."""
+    from margAI.bangtag import Tag
+
+    intent = RoutingIntent.from_tags([Tag("approve", namespace="hr"), Tag("route", value="x")])
+    assert "hr:approve" in intent.qualified
+    assert "margai:route" in intent.qualified
+    assert intent.from_namespace("hr") == ("hr:approve",)
+    assert intent.from_namespace("sc") == ()
+
+
+def test_builtin_pack_fills_the_typed_fields_through_handlers():
+    """The same values, reaching the intent the way a real call reaches them:
+    parsed, then claimed by the built-in pack's handlers."""
+    w, _ = build()
+    seen: list[RoutingIntent] = []
+
+    @w.before(order=-40)
+    def capture(ctx):
+        seen.append(ctx.intent)
+
+    # A concrete model, so the router never consults the constraints: this is
+    # about the selectors reaching the intent, not about how they interact.
+    # (Combining `route=local/qwen3` with `only=llama3` under `dynamic` is the
+    # documented loud 404, covered by its own test below.)
+    r = asyncio.run(
+        w.complete(call(w, model="margAI/openai/gpt-4o", tag="route=local/qwen3, not=openai, only=llama3, cheap"))
+    )
+    assert r.status == 200
+    intent = seen[-1]
     assert intent.provider == "local"
     assert intent.model == "qwen3"
     assert "openai" in intent.exclude
     assert "llama3" in intent.require
     assert intent.wants("cheap")
-    assert "cheap" in intent.tags
 
 
 def test_constraint_tokens_match_provider_model_or_pair():
@@ -195,7 +241,8 @@ def test_constraint_tokens_match_provider_model_or_pair():
 def test_intent_is_immutable_and_refinement_returns_a_new_value():
     base = RoutingIntent(tags=("cheap",))
     refined = base.with_(provider="local").note("why", "user asked")
-    assert base.provider is None and base.notes == ()
+    assert base.provider is None
+    assert base.notes == ()
     assert refined.provider == "local"
     assert refined.tags == ("cheap",)
     assert refined.describe()["notes"] == {"why": "user asked"}
@@ -214,6 +261,48 @@ def test_bangtag_route_pinning_beats_the_selector_chain():
     r = asyncio.run(w.complete(call(w, tag="route=local/qwen3")))
     assert r.status == 200
     assert "local.test" in routed_to(t)
+
+
+def test_bangtag_pin_is_still_subject_to_the_calls_own_constraints():
+    """`route=` states a preference, `not=` states policy. A contradiction
+    between them must fail loudly rather than quietly serve the excluded
+    target -- the same rule `default_provider` already follows."""
+    w, t = build(default_provider="openai")
+    w.routing.add_selector(lambda i, c, ctx: "local/qwen3", name="chain", order=-100)
+    r = asyncio.run(w.complete(call(w, tag="route=openai/gpt-4o, not=openai")))
+    assert r.status == 404
+    assert "exclude" in r.body["error"]["message"]
+    assert t.requested == []  # nothing went upstream
+
+
+def test_bangtag_pin_still_works_when_only_constrains_elsewhere():
+    """The constraint check must not break the common case: pinning a target
+    that the constraints do not mention."""
+    w, t = build(default_provider="openai")
+    r = asyncio.run(w.complete(call(w, tag="route=local/qwen3, not=openai")))
+    assert r.status == 200
+    assert "local.test" in routed_to(t)
+
+
+def test_bangtag_pin_records_its_route_reason():
+    """A pinned dynamic call is still a dynamic call, so it must be
+    attributable in telemetry like every other one."""
+    records: list = []
+    w, _ = build(telemetry=Telemetry(TelemetryConfig(enabled=True, emit="callback"), callback=records.append))
+    asyncio.run(w.complete(call(w, tag="route=local/qwen3")))
+    assert records[0].provider == "local"
+    assert records[0].route_reason == "bangtag:route"
+
+
+def test_bangtag_pin_naming_an_unknown_provider_is_a_loud_404():
+    """A typo'd `route=` must not quietly fall through to the chain and serve
+    something the caller did not ask for."""
+    w, t = build(default_provider="openai")
+    w.routing.add_selector(lambda i, c, ctx: "local/qwen3", name="chain", order=0)
+    r = asyncio.run(w.complete(call(w, tag="route=nope/nothing")))
+    assert r.status == 404
+    assert "nope" in r.body["error"]["message"]
+    assert t.requested == []
 
 
 def test_marglet_can_steer_the_intent_before_routing():

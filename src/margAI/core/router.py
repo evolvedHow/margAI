@@ -28,14 +28,14 @@ __all__ = ["Candidate", "ModelRouter", "Route"]
 logger = logging.getLogger("margAI.router")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Route:
     provider: str
     model: str
     reason: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Candidate:
     """One routable (provider, model) pair offered to the dynamic router."""
 
@@ -107,6 +107,10 @@ class ModelRouter:
             for model in provider.configured_models():
                 index.setdefault(model, []).append(name)
         self._by_model = index
+
+    def model_ids(self) -> list[str]:
+        """Every bare model id any provider offers, for collision checks."""
+        return sorted(self._by_model)
 
     def candidates(self) -> list[Candidate]:
         """Every routable (provider, model) pair, in a stable order."""

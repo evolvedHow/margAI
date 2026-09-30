@@ -48,7 +48,7 @@ logger = logging.getLogger("margAI.routing")
 SelectorFn = Callable[[RoutingIntent, Sequence[Candidate], Any], Any]
 
 
-@dataclass
+@dataclass(slots=True)
 class Selector:
     """One named policy in the chain."""
 
@@ -161,8 +161,13 @@ class Routing:
         name: str | None = None,
         order: int = 0,
         only_for: Iterable[str] = (),
-    ):
-        """Decorator form of :meth:`add_selector`."""
+    ) -> Any:
+        """Decorator form of :meth:`add_selector`.
+
+        ``Any`` on the way out because this returns either the registered
+        selector or a decorator waiting for one, and the caller cannot tell
+        which from the call alone.
+        """
         if fn is None:
             def deco(inner: SelectorFn) -> SelectorFn:
                 self.add_selector(inner, name=name, order=order, only_for=only_for)

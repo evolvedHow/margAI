@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from margAI import Marglet, Wrapper, install_bangtags
+from margAI import Marglet, RequestContext, Tag, Wrapper, install_bangtags
 
 BULLETS_SYSTEM_PROMPT = (
     "Structure your answer as a bulleted list. One point per bullet, no prose paragraphs."
@@ -33,7 +33,7 @@ def register_decorator(app: Wrapper) -> None:
     """The shortest form: a name, and a before-hook."""
 
     @app.marglet("bullets", summary="Answer as a bulleted list")
-    def bullets(ctx, tag):
+    def bullets(ctx: RequestContext, tag: Tag) -> None:
         ctx.add_system_prompt(BULLETS_SYSTEM_PROMPT)
 
 
@@ -68,17 +68,17 @@ def register_explicit(app: Wrapper) -> None:
 class Writing:
     """Several marglets in one object, named ``{marglet}_{phase}``."""
 
-    def terse_before(self, ctx, tag):
+    def terse_before(self, ctx: RequestContext, tag: Tag) -> None:
         """Answer in as few words as possible."""
         ctx.add_system_prompt("Answer in as few words as possible.")
 
-    def terse_after(self, payload, ctx, tag):
+    def terse_after(self, payload: dict[str, Any], ctx: RequestContext, tag: Tag) -> dict[str, Any]:
         content = payload.get("choices", [{}])[0].get("message", {}).get("content")
         if content:
             payload["choices"][0]["message"]["content"] = content.strip()
         return payload
 
-    def cite_before(self, ctx, tag):
+    def cite_before(self, ctx: RequestContext, tag: Tag) -> None:
         """Cite a source for every claim."""
         ctx.add_system_prompt("Cite a source for every claim you make.")
 

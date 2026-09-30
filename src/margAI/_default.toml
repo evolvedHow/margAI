@@ -1,0 +1,47 @@
+# margAI embedded defaults.
+#
+# This file ships inside the package and is the lowest-priority layer of
+# configuration, below any margAI.toml the operator provides and below
+# MARGAI_* environment variables. It exists so a fresh install can route a
+# request without anyone having to write a config file first.
+#
+# What is deliberately NOT here:
+#
+#   hooks.load   An example is not a default. Auto-loading anything would run
+#                code the operator did not ask to run, on import, silently.
+#   localhost    A provider on 127.0.0.1 is a property of one deployment, not
+#                of the software. Set base_url in your own margAI.toml.
+#   api keys     Only the *name* of the environment variable lives here, so a
+#                key is never in a file that gets copied around.
+
+[gateway]
+prefix = "margAI"
+expose = "prefixed"
+timeout = 60.0
+models_cache_ttl = 300.0
+dynamic_model = "dynamic"
+on_unknown_tag = "warn"
+
+[telemetry]
+enabled = true
+emit = "log"
+
+[providers.openai]
+kind = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+models = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"]
+default_model = "gpt-4o"
+
+[providers.gemini]
+kind = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+api_key_env = "GEMINI_API_KEY"
+models = ["gemini-flash-latest", "gemini-3.1-flash-lite"]
+default_model = "gemini-flash-latest"
+
+[providers.openrouter]
+kind = "openai"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+models = []

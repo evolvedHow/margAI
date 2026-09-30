@@ -16,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 __all__ = ["PreparedRequest", "Transport", "UpstreamResponse", "UpstreamStream"]
 
 
-@dataclass
+@dataclass(slots=True)
 class PreparedRequest:
     method: str = "POST"
     url: str = ""
@@ -27,7 +27,7 @@ class PreparedRequest:
     files: Any = None  # multipart file parts, e.g. {"file": (name, bytes, type)}
 
 
-@dataclass
+@dataclass(slots=True)
 class UpstreamResponse:
     status: int
     body: Any

@@ -8,17 +8,38 @@ timeout = 60.0                # default upstream timeout (seconds)
 default_provider = ""         # e.g. "openai" routes unprefixed/unknown models here
 models_cache_ttl = 300.0      # seconds /v1/models catalog is cached
 dynamic_model = "dynamic"     # reserved id "<prefix>/<dynamic_model>" routes per call
+# What to do with a bangtag no handler claims: warn | error | ignore.
+# "error" turns a typo in user text into a 400 instead of a log line.
+on_unknown_tag = "warn"
+# Scan the `margAI.packs` entry point group for installed packs.
+pack_discovery = true
+# Install only these packs; a named pack that fails to install is then an error.
+# packs_only = ["my_pack"]
 # host and port are used by `uv run margAI`:
 host = "0.0.0.0"
 port = 8000
 
 [telemetry]
 enabled = true
-emit = "log"                  # none | log | callback
+emit = "log"                  # none | log | callback | file
 # callback = "myapp.telemetry:on_record"   # when emit = "callback"
+# File sink (emit = "file"): one JSON object per line, named from the app and
+# the start time, e.g. my_gateway_telemetry_260929143022.log.
+# label = "my_gateway"        # default: the gateway prefix
+# dir = "~/logs"              # default: $XDG_STATE_HOME/margAI/logs
+# Billing cycle for the highest_balance strategy. Metering needs BOTH this and
+# prices below; with either missing, highest_balance degrades to least_used.
+# reset_day = 1                # day of month the cycle starts (1-31)
+# period_start = "2026-01-01"  # or an explicit period instead of reset_day...
+# period_end = "2026-01-31"    # ...both bounds required together
 
 [telemetry.costs]             # optional $ per 1M tokens for cost estimates
-"openai/gpt-4o" = { in = 2.50, out = 10.00 }
+"my_openai/gpt-4o" = { in = 2.50, out = 10.00 }
+
+# [telemetry.budgets]         # optional $ caps, read by highest_balance
+# "my_openai/gpt-4o" = 50.0    # one provider+model
+# "my_openai/*" = 100.0        # a whole provider
+# "gpt-4o-mini" = 20.0         # a bare model applies to any provider hosting it
 
 [hooks]
 load = []                     # e.g. ["margAI.examples.optimize_hooks"] or ["myapp.hooks:register"]
@@ -29,6 +50,7 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 # models = ["gpt-4o", "gpt-4o-mini"]   # optional: static list (offline routing)
 # default_model = "gpt-4o"
+# timeout = 30.0              # per-provider; overrides gateway.timeout
 
 # Anthropic:
 # [providers.anthropic]
@@ -41,4 +63,18 @@ api_key_env = "OPENAI_API_KEY"
 # [providers.local]
 # kind = "openai-compatible"
 # base_url = "http://localhost:11434/v1"
-# api_key_env = ""
+# No api_key_env at all for a server that does not authenticate. An empty
+# string is an error ("api_key_env must not be empty"), not "no key".
+
+# Virtual models: a name clients send instead of a real model id.
+# [models.fast]
+# strategy = "cheapest"              # first | cheapest | round_robin | least_used | highest_balance
+# providers = ["my_openai"]
+# exclude_providers = ["openrouter"]
+# prefer = ["my_openai/gpt-4o-mini"]  # tried first; a miss is skipped, not fatal
+# max_cost_per_1m = 1.0              # blended $/1M, needs [telemetry.costs]
+# tags = ["chat"]                    # eligible only when the call carries these
+#
+# least_used picks the candidate with the fewest calls this billing window.
+# highest_balance picks the most budget left ([telemetry.budgets]); it needs
+# BOTH [telemetry.costs] and reset_day, and otherwise behaves like least_used.

@@ -26,8 +26,10 @@ The framework owns the pipeline, exit points, and telemetry. You own the logic.
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .bangtag import install_bangtags
 from .config import load_config
@@ -54,26 +56,29 @@ class Gateway:
         self,
         config: str | Path | Config | None = None,
         *,
-        load_builtin_tags: bool = False,
+        load_builtin_tags: bool | None = None,
     ) -> None:
         """Create a gateway.
-        
+
         Args:
             config: Path to TOML config file, Config instance, or None to load
                 from ./margAI.toml or $MARGAI_CONFIG
-            load_builtin_tags: Whether to install built-in routing tags
-                (route=, provider=, model=, etc.). Default False - define your own.
-        
+            load_builtin_tags: Accepted and ignored. The built-in tag pack
+                (`route=`, `provider=`, `model=`, ...) is installed by
+                `Wrapper` itself, so it is always present. This used to be the
+                opt-in; it is now a no-op kept so existing callers keep
+                working. To turn the directives off, disable the pack by name::
+
+                    [packs."margAI.builtin_tags"]
+                    enabled = false
+
         Example::
-        
+
             # Auto-load from ./margAI.toml
             app = Gateway()
-            
+
             # Explicit config path
             app = Gateway("my_config.toml")
-            
-            # With built-in tags
-            app = Gateway(load_builtin_tags=True)
         """
         # Load config
         if isinstance(config, (str, Path)):
@@ -82,18 +87,28 @@ class Gateway:
             config_obj = load_config()
         else:
             config_obj = config
-        
+
         # Create wrapper (without auto-loading hooks)
         self.wrapper = Wrapper.from_config(config_obj, load_hooks=False)
         self._namespace = config_obj.gateway.prefix
-        
-        # Auto-install bangtag parsing (but no built-in tags unless requested)
+
+        # Auto-install bangtag parsing for the application's own namespace.
+        # This is in addition to the one the built-in pack installs for the
+        # reserved `margAI` namespace, so a deployment that renames itself still
+        # answers to `!veda:` while `!margAI:` keeps working.
         install_bangtags(self.wrapper, namespace=self._namespace)
-        
-        # Optionally install built-in tags
+
         if load_builtin_tags:
-            from .builtin_tags import install as install_builtin_tags
-            install_builtin_tags(self.wrapper)
+            # Installing them a second time would make every built-in directive
+            # log "replacing before handler" for itself, which is a confusing way
+            # to learn that a flag you set is already the default.
+            warnings.warn(
+                "Gateway(load_builtin_tags=...) is a no-op: the built-in tag pack "
+                "is always installed. Disable it with "
+                '[packs."margAI.builtin_tags"] enabled = false.',
+                DeprecationWarning,
+                stacklevel=2,
+            )
     
     def tag(self, name: str, **kwargs: Any) -> Callable:
         """Register a bangtag handler.
@@ -205,7 +220,48 @@ class Gateway:
                     return {"error": {"message": "Request timed out"}}
         """
         return self.wrapper.error(func)
-    
+
+    # The names `Wrapper` uses, forwarded so that moving between the two front
+    # ends is a change of import rather than a rewrite. `on_request` and friends
+    # above stay as the friendlier spelling; both register the same hook.
+    #
+    # Written out rather than a `__getattr__`: a proxy that silently invents a
+    # method turns a typo into an `AttributeError` three frames deep, and
+    # `Gateway` is the surface people are meant to read.
+
+    def before(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.before` -- see `on_request`."""
+        return self.wrapper.before(*args, **kwargs)
+
+    def after(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.after` -- see `on_response`."""
+        return self.wrapper.after(*args, **kwargs)
+
+    def stream(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.stream` -- see `on_stream`."""
+        return self.wrapper.stream(*args, **kwargs)
+
+    def error(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.error` -- see `on_error`."""
+        return self.wrapper.error(*args, **kwargs)
+
+    def on(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.on` -- register a named, namespaced handler. `tag` is the
+        common case; this is the general one."""
+        return self.wrapper.on(*args, **kwargs)
+
+    def marglet(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.marglet`."""
+        return self.wrapper.marglet(*args, **kwargs)
+
+    def add_marglet(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.add_marglet`."""
+        return self.wrapper.add_marglet(*args, **kwargs)
+
+    def pack(self, *args: Any, **kwargs: Any) -> Any:
+        """`Wrapper.pack`."""
+        return self.wrapper.pack(*args, **kwargs)
+
     def serve(
         self,
         host: str | None = None,
@@ -228,9 +284,12 @@ class Gateway:
             app.serve()  # Starts on config host:port
         """
         import uvicorn
+
         from .transport.fastapi import build_app
-        
+
         config = self.wrapper.config
+        if config is None:  # a Gateway built without config has no host/port to read
+            raise RuntimeError("serve() needs a config; build the Gateway from load_config()")
         uvicorn.run(
             build_app(wrapper=self.wrapper),
             host=host or config.gateway.host,
